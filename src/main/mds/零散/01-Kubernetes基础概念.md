@@ -54,3 +54,48 @@
 7. kuberlet：Node的代表，监控Node的情况，处理Node的请求。
 8. k-proxy：即kube-proxy，通过它进行容器之间的通信，实现容器之间的负载均衡。
 9. c-c-m：即Cloud controller manager，它是一个可选的组件，用来与外部的API进行交互。
+
+# Kubernetes的流程示例（画好图才发现写错了，kubertlet×	kubelet√）
+
+## 初始状态
+
+假设有这么一个Kubernetes集群：
+
+![02](01-Kubernetes基础概念.assets/02.png)
+
+值得注意的是，Master本质也是一个节点，它能做到其他Node一样的事。但是结合[ElasticSearch](https://github.com/9029HIME/Es_Study/blob/master/2022-ES-Relearn/04-%E8%8A%82%E7%82%B9%E7%B1%BB%E5%9E%8B.md)和[Kafka](https://github.com/9029HIME/Kafka_Study/blob/master/src/mds/06%20Kafka%E7%9A%84%E5%8E%BBZooKeeper%E5%8C%96%EF%BC%9AKRaft%E6%A8%A1%E5%BC%8F.md)的节点职责来看，实际生产使用Kubernetes还是遵循单一职责会比较好。
+
+## 自我修复流程
+
+![03](01-Kubernetes基础概念.assets/03.png)
+
+作为节点内的kubelet，会时刻监控节点内容器的状态，假如此时某个节点的容器A发生个故障。此时会经历以下10个步骤：
+
+![04](01-Kubernetes基础概念.assets/04.png)
+
+1. kubelet检测到当前节点的 容器A 发生宕机。
+2. 在kubelet 和 api-server的 **定时通讯** 中，kubelet通过api-server，告知Master容器A发生了宕机。
+3. api-server将宕机信息传到controller-manager。
+4. controller-manager根据 **宕机配置** 做出宕机决策，假设此时配置：转移容器A 到 另一个节点。controller-manager将决策发送给api-server，
+5. api-server将controller-manager本次决策事件存入etcd。
+6. api-server告知scheduler，让其选择一个合适的节点，接收容器A。
+7. scheduler通过计算，选择出一个合适的节点，并将节点信息、转移信息存入etcd。
+8. scheduler调用api-server，告知选择哪个节点，接收容器A。
+9. 在kubelet 和 api-server的 **定时通讯** 中，kubelet通过api-server，得知需要在本节点启动容器A。
+10. 启动成功后，kubelet持续监控容器A。
+
+## 容器间请求流程
+
+还是以上面的例子，假如容器A自我修复后，左边Node的容器B 想请求 容器A，流程会这样的：
+
+![05](01-Kubernetes基础概念.assets/05.png)
+
+0. 首先得明确一点，kube-proxy之间会同步好数据（CA还是CP那是后话了），保证对于每个节点来说，都能拿到准确的容器地址信息。
+1. 容器B想要访问容器A，会请求kube-proxy。
+2. kube-proxy根据 **负载均衡** 策略，将请求转发到对应的容器ip上，假设本次转发到另一个Node的容器A。
+
+## kubectl的引出
+
+![06](01-Kubernetes基础概念.assets/06.png)
+
+实际上，kubectl是一个封装好的组件，对外暴露给我们开发人员使用，我们可以通过特定的kubectl命令，与api-server进行交互，从而管理整个Kubernetes集群以及容器集群。
