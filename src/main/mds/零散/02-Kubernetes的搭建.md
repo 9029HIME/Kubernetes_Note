@@ -92,7 +92,8 @@ Kubernetes和其他分布式组件不太一样，它比较复杂，有必要提�
    
    ###
    
-   apt-get install -y kubelet kubeadm kubectl
+   apt install kubeadm=1.20.9-00 kubelet=1.20.9-00 kubectl=1.20.9-00
+   
    ```
 
 3. 启动kubelet：
@@ -254,14 +255,43 @@ kjg1@ubuntu02:~$
 
 ```bash
 kubeadm init \
---apiserver-advertise-address=${masterIP} \
---control-plane-endpoint=${master名称} \
---image-repository registry.cn-hangzhou.aliyuncs.com/lfy_k8s_images \
---kubernetes-version v1.20.9 \
+--apiserver-advertise-address=192.168.120.161 \
+--control-plane-endpoint=192.168.120.161 \
+--image-repository registry.aliyuncs.com/google_containers \
+--kubernetes-version 1.20.9 \
 --service-cidr=10.96.0.0/16 \
---pod-network-cidr=172.168.0.0/16
+--pod-network-cidr=172.31.0.0/16
 
-#service-cidr、pod-network-cidr、主机ip三者之间不要有重叠
+###
+异常:failed with error: Get “http://localhost:10248/healthz
+解决方法：https://blog.csdn.net/sinat_32900379/article/details/122135698
+
+异常：network plugin is not ready: cni config uninitialized
+解决方法：https://blog.csdn.net/ahyz9638/article/details/101561525
+
+
+
+###
+解决异常后的清理：
+kubeadm reset
+```
+
+修改配置文件kubeadm.yml：
+
+```properties
+#修改advertiseAddress:为master主机IP
+advertiseAddress: 192.168.120.161
+#因为有墙,把镜像源修改为国内的，比如阿里云
+imageRepository: registry.aliyuncs.com/google_containers
+#顺便配置calico的默认网段(后面网络配置会用到)
+podSubnet: "192.168.0.0/16"
+```
+
+拉取镜像：
+
+```
+kubeadm config images list --config kubeadm.yml
+kubeadm config images pull --config kubeadm.yml
 ```
 
 执行成功后：
@@ -289,10 +319,10 @@ kubectl get nodes
 
 但是，Master想要连同其他Node，需要添加一个网络插件，Kubernetes有许多网络插件，这里以安装 Calico为例：
 
-下载Calico的配置文件：
+下载Calico的配置文件：docker pull mariadb:10.3.34
 
 ```bash
-curl https://docs.projectcalico.org/manifests/calico.yaml -O
+curl https://docs.projectcalico.org/v3.21/manifests/calico.yaml -O
 ```
 
 修改配置文件内容，将value: "192.168.0.0/16"改成pod-network-cidr的值：
