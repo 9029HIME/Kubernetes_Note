@@ -29,6 +29,27 @@ Kubernetes对运行环境有点要求，在安装Kubernetes之前，要做以下
    EOF
    sudo sysctl --system
    ```
+   
+4. 告诉Docker，使用systemd
+
+   ```
+   sudo mkdir -p /etc/docker
+   sudo tee /etc/docker/daemon.json <<-'EOF'
+   {
+     "registry-mirrors": ["https://82m9ar63.mirror.aliyuncs.com"],
+     "exec-opts": ["native.cgroupdriver=systemd"],
+     "log-driver": "json-file",
+     "log-opts": {
+       "max-size": "100m"
+     },
+     "storage-driver": "overlay2"
+   }
+   EOF
+   sudo systemctl daemon-reload
+   sudo systemctl restart docker
+   ```
+
+   
 
 以上3步准备完毕后，就能够安装Kubernetes了。
 
@@ -60,42 +81,23 @@ Kubernetes和其他分布式组件不太一样，它比较复杂，有必要提�
 
 # 三大件安装
 
-1. 先告诉机器，yum源指定aliyun镜像：
+1. 添加aptkey
 
    ```bash
-   cat <<EOF | sudo tee /etc/yum.repos.d/kubernetes.repo
-   [kubernetes]
-   name=Kubernetes
-   baseurl=http://mirrors.aliyun.com/kubernetes/yum/repos/kubernetes-el7-x86_64
-   enabled=1
-   gpgcheck=0
-   repo_gpgcheck=0
-   gpgkey=http://mirrors.aliyun.com/kubernetes/yum/doc/yum-key.gpg
-      http://mirrors.aliyun.com/kubernetes/yum/doc/rpm-package-key.gpg
-   exclude=kubelet kubeadm kubectl
-   EOF
-   
-   ###
-   
-   
    sudo curl https://mirrors.aliyun.com/kubernetes/apt/doc/apt-key.gpg | apt-key add -
    
    sudo cat << EOF >/etc/apt/sources.list.d/kubernetes.list
    deb https://mirrors.aliyun.com/kubernetes/apt/ kubernetes-xenial main
    EOF
    ```
-
+   
 2. 安装kubelet、kubeadm、kubectl：
 
    ```bash
-   sudo yum install -y kubelet-1.20.9 kubeadm-1.20.9 kubectl-1.20.9 --disableexcludes=kubernetes
-   
-   ###
-   
+   apt update
    apt install kubeadm=1.20.9-00 kubelet=1.20.9-00 kubectl=1.20.9-00
-   
    ```
-
+   
 3. 启动kubelet：
 
    ```bash
@@ -266,38 +268,9 @@ kubeadm init \
 异常:failed with error: Get “http://localhost:10248/healthz
 解决方法：https://blog.csdn.net/sinat_32900379/article/details/122135698
 
-异常：network plugin is not ready: cni config uninitialized
-解决方法：https://blog.csdn.net/ahyz9638/article/details/101561525
-
-
-
 ###
 解决异常后的清理：
 kubeadm reset
-```
-
-修改配置文件kubeadm.yml：
-
-```properties
-#修改advertiseAddress:为master主机IP
-advertiseAddress: 192.168.120.161
-#因为有墙,把镜像源修改为国内的，比如阿里云
-imageRepository: registry.aliyuncs.com/google_containers
-#顺便配置calico的默认网段(后面网络配置会用到)
-podSubnet: "192.168.0.0/16"
-```
-
-拉取镜像：
-
-```
-kubeadm config images list --config kubeadm.yml
-kubeadm config images pull --config kubeadm.yml
-```
-
-执行成功后：
-
-```bash
-
 ```
 
 还没完，还需要执行以下命令，添加权限：
@@ -312,14 +285,16 @@ kubeadm config images pull --config kubeadm.yml
 
 ```bash
 #查看Kubernetes集群内所有节点
-kubectl get nodes
+root@kjg-PC:~# kubectl get nodes
+NAME     STATUS     ROLES                  AGE    VERSION
+kjg-pc   NotReady   control-plane,master   2m6s   v1.20.9
 ```
 
 ## 初始化后
 
 但是，Master想要连同其他Node，需要添加一个网络插件，Kubernetes有许多网络插件，这里以安装 Calico为例：
 
-下载Calico的配置文件：docker pull mariadb:10.3.34
+下载Calico的配置文件：
 
 ```bash
 curl https://docs.projectcalico.org/v3.21/manifests/calico.yaml -O
@@ -377,7 +352,7 @@ kubectl get pods -A
    kubeadm join ${masterIP}:6443 --token ${token值} --discovery-token-ca-cert-hash sha256:${hash值}
    ```
 
-5. 也可以直接在Master执行以下命令，获取完成kubeadm join：
+5. **也可以直接在Master执行以下命令，获取完成kubeadm join**：
 
    ```bash
    kubeadm token create --print-join-command
@@ -388,7 +363,11 @@ kubectl get pods -A
 ## 在主节点查看nodes状态
 
 ```bash
-kubectl get nodes
+root@kjg-PC:~# kubectl get nodes
+NAME       STATUS   ROLES                  AGE     VERSION
+kjg-pc     Ready    control-plane,master   42m     v1.20.9
+ubuntu01   Ready    <none>                 7m15s   v1.20.9
+ubuntu02   Ready    <none>                 105s    v1.20.9
 ```
 
 会发现noready，等待一段时间后，会发现状态变回ready。
