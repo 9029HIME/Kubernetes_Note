@@ -376,4 +376,66 @@ ubuntu02   Ready    <none>                 105s    v1.20.9
 
 # 部署Dashboard
 
-TODO
+1. 下载dashboard的配置文件（**这个配置文件的yaml内容是看不懂的，不用着急，学到后面就知道了**）
+
+   ```bash
+   curl https://raw.githubusercontent.com/kubernetes/dashboard/v2.3.1/aio/deploy/recommended.yaml -O
+   ```
+
+2. 使Kubernetes应用配置文件
+
+   ```bash
+   root@kjg-PC:~# chmod +x recommended.yaml && kubectl apply -f recommended.yaml
+   namespace/kubernetes-dashboard created
+   serviceaccount/kubernetes-dashboard created
+   service/kubernetes-dashboard created
+   secret/kubernetes-dashboard-certs created
+   secret/kubernetes-dashboard-csrf created
+   secret/kubernetes-dashboard-key-holder created
+   configmap/kubernetes-dashboard-settings created
+   role.rbac.authorization.k8s.io/kubernetes-dashboard created
+   clusterrole.rbac.authorization.k8s.io/kubernetes-dashboard created
+   rolebinding.rbac.authorization.k8s.io/kubernetes-dashboard created
+   clusterrolebinding.rbac.authorization.k8s.io/kubernetes-dashboard created
+   deployment.apps/kubernetes-dashboard created
+   service/dashboard-metrics-scraper created
+   deployment.apps/dashboard-metrics-scraper created
+   ```
+
+3. 通过kubectl，更改dashboard配置文件的内容（**看不懂没关系，到后面就知道了**）
+
+   ```bash
+   #将spec.type改为NodePort，保存
+   root@kjg-PC:~# kubectl edit svc kubernetes-dashboard -n kubernetes-dashboard
+   service/kubernetes-dashboard edited
+   ```
+   
+   ![06](02-Kubernetes的搭建.assets/06.png)
+   
+4. 查看dashborad的端口映射（类似Docker的-p），可以发现映射外部端口是31880
+
+   ```bash
+   root@kjg-PC:~# kubectl get svc -A |grep kubernetes-dashboard
+   kubernetes-dashboard   dashboard-metrics-scraper   ClusterIP   10.96.220.153   <none>        8000/TCP                 41m
+   kubernetes-dashboard   kubernetes-dashboard        NodePort    10.96.158.59    <none>        443:31880/TCP            41m
+   ```
+
+5. 通过http协议访问本机的31880端口：
+
+6. 
+
+# 部署问题总结
+
+## 集群部署成功后，使用kubelet命令提示net/http: TLS handshake timeout
+
+1. swap没有永久关闭
+
+   解决方法：永久关闭。
+
+2. 内存不足
+
+   解决方法：分配更大内存
+
+3. 使用了代理
+
+   解决方法：unset http_proxy \ unset https_proxy	
