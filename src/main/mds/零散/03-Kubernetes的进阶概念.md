@@ -90,7 +90,7 @@ kubernetes-dashboard   Active   17h
 root@kjg-PC:~# kubectl get pods -A
 NAMESPACE              NAME                                         READY   STATUS        RESTARTS   AGE
 kube-system            calico-kube-controllers-5bb48c55fd-r6txn     1/1     Running       6          3d2h
-kube-system            calico-node-7p8wd                            0/1     Running       6          3d2h
+kube-system            calico-node-7p8wd                            1/1     Running       6          3d2h
 kube-system            calico-node-9pxml                            1/1     Running       3          3d1h
 kube-system            calico-node-bvrgq                            1/1     Running       3          3d1h
 kube-system            coredns-7f89b7bc75-b2r68                     1/1     Running       6          3d2h
@@ -183,8 +183,6 @@ root@kjg-PC:~# kubectl apply -f pod-nginx.yaml
 pod/pod-nginx created
 ```
 
-
-
 ## 删除Pod
 
 ```bash
@@ -195,3 +193,145 @@ root@kjg-PC:~# kubectl get pod -n default
 No resources found in default namespace.
 ```
 
+## 创建多容器Pod
+
+这里以配置文件的方式（multi-pods.yaml）：
+
+```yaml
+#指定版本
+apiVersion: v1
+#指定资源类型
+kind: Pod
+#pod的元数据
+metadata:
+  labels: 
+  	#pod要启动哪个container，spec.containers.name相同
+    run: multi-pods
+    #pod名称
+  name: multi-pods
+spec:
+  containers:
+  	#pod包含哪些容器
+  - image: nginx
+  	#这个容器叫什么名字
+    name: pod-nginx
+  - image: tomcat:8.5.68
+  	name: pod-tomcat
+```
+
+```bash
+root@kjg-PC:~# kubectl apply -f multi-pods.yaml 
+pod/multi-pods created
+root@kjg-PC:~# kubectl get pods -n default		#表示容器正在创建中。
+NAME         READY   STATUS              RESTARTS   AGE
+multi-pods   0/2     ContainerCreating   0          38s
+root@kjg-PC:~# kubectl describe pod multi-pods	#通过describe命令，可以看到multi-pods的创建过程，它又被分到Ubuntu01了。此时正在拉取Tomcat的镜像。
+Events:
+  Type    Reason     Age   From               Message
+  ----    ------     ----  ----               -------
+  Normal  Scheduled  95s   default-scheduler  Successfully assigned default/multi-pods to ubuntu01
+  Normal  Pulling    94s   kubelet            Pulling image "nginx"
+  Normal  Pulled     73s   kubelet            Successfully pulled image "nginx" in 20.707299253s
+  Normal  Created    73s   kubelet            Created container pod-nginx
+  Normal  Started    73s   kubelet            Started container pod-nginx
+  Normal  Pulling    73s   kubelet            Pulling image "tomcat:8.5.68"
+root@kjg-PC:~# kubectl get pods -n default		#再等一会儿，发现multi-pods成功启动。
+NAME         READY   STATUS    RESTARTS   AGE
+multi-pods   2/2     Running   0          3m31s
+
+
+
+root@ubuntu01:~# docker ps		#此时去Ubuntu01看看，multi-pods的容器确实在这运行着。
+CONTAINER ID   IMAGE                                               COMMAND                  CREATED          STATUS          PORTS     NAMES
+99b5a5318389   tomcat                                              "catalina.sh run"        2 minutes ago    Up 2 minutes              k8s_pod-tomcat_multi-pods_default_4c3daf92-e8dd-43a7-9d2d-dbb3f274a998_0
+c7f6ae38a08d   nginx                                               "/docker-entrypoint.…"   4 minutes ago    Up 4 minutes              k8s_pod-nginx_multi-pods_default_4c3daf92-e8dd-43a7-9d2d-dbb3f274a998_0
+```
+
+```bash
+root@kjg-PC:~# kubectl get pod multi-pods -owide	#找到mult-pods的详细信息，可以发现访问multi-pods的地址是172.31.3.195。
+NAME         READY   STATUS    RESTARTS   AGE   IP             NODE       NOMINATED NODE   READINESS GATES
+multi-pods   2/2     Running   0          43m   172.31.3.195   ubuntu01   <none>           <none>
+root@kjg-PC:~# curl http://172.31.3.195			#直接curl它的80端口，访问nginx成功。
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+<style>
+html { color-scheme: light dark; }
+body { width: 35em; margin: 0 auto;
+font-family: Tahoma, Verdana, Arial, sans-serif; }
+</style>
+</head>
+<body>
+<h1>Welcome to nginx!</h1>
+<p>If you see this page, the nginx web server is successfully installed and
+working. Further configuration is required.</p>
+
+<p>For online documentation and support please refer to
+<a href="http://nginx.org/">nginx.org</a>.<br/>
+Commercial support is available at
+<a href="http://nginx.com/">nginx.com</a>.</p>
+
+<p><em>Thank you for using nginx.</em></p>
+</body>
+</html>
+
+
+root@kjg-PC:~# curl http://172.31.3.195:8080	#直接curl它的8080端口，访问tomcat成功。
+<!doctype html><html lang="en"><head><title>HTTP Status 404 – Not Found</title><style type="text/css">body {font-family:Tahoma,Arial,sans-serif;} h1, h2, h3, b {color:white;background-color:#525D76;} h1 {font-size:22px;} h2 {font-size:16px;} h3 {font-size:14px;} p {font-size:12px;} a {color:black;} .line {height:1px;background-color:#525D76;border:none;}</style></head><body><h1>HTTP Status 404 – Not Found</h1><hr class="line" /><p><b>Type</b> Status Report</p><p><b>Description</b> The origin server did not find a current representation for the target resource or is not willing to disclose that one exists.</p><hr class="line" /><h3>Apache Tomcat/8.5.68</h3></body></html>
+```
+
+## 进入某个Pod内进行操作
+
+还是以上面的multi-pods为例，我现在要通过Kubernetes，进入里面的nginx容器（容器名是pod-nginx）、tomcat容器（容器名是pod-tomcat）进行操作：
+
+```bash
+root@kjg-PC:~# kubectl exec -it multi-pods -c pod-nginx  -- /bin/bash
+root@multi-pods:/# pwd
+/
+root@multi-pods:/# curl
+curl: try 'curl --help' or 'curl --manual' for more information
+root@multi-pods:/# exit 
+exit
+command terminated with exit code 2
+root@kjg-PC:~# kubectl exec -it multi-pods -c pod-nginx  -- /bin/bash
+root@multi-pods:/# pwd
+/
+root@multi-pods:/# curl http://localhost:8080
+<!doctype html><html lang="en"><head><title>HTTP Status 404 – Not Found</title><style type="text/css">body {font-family:Tahoma,Arial,sans-serif;} h1, h2, h3, b {color:white;background-color:#525D76;} h1 {font-size:22px;} h2 {font-size:16px;} h3 {font-size:14px;} p {font-size:12px;} a {color:black;} .line {height:1px;background-color:#525D76;border:none;}</style></head><body><h1>HTTP Status 404 – Not Found</h1><hr class="line" /><p><b>Type</b> Status Report</p><p><b>Description</b> The origin server did not find a current representation for the target resource or is not willing to disclose that one exists.</p><hr class="line" /><h3>Apache Tomcat/8.5.68</h3></body></html> 
+root@multi-pods:/# exit
+exit
+root@kjg-PC:~#
+
+
+root@kjg-PC:~# kubectl exec -it multi-pods -c pod-tomcat  -- /bin/bash
+root@multi-pods:/usr/local/tomcat# pwd
+/usr/local/tomcat
+root@multi-pods:/usr/local/tomcat# curl http://localhost:80
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+<style>
+html { color-scheme: light dark; }
+body { width: 35em; margin: 0 auto;
+font-family: Tahoma, Verdana, Arial, sans-serif; }
+</style>
+</head>
+<body>
+<h1>Welcome to nginx!</h1>
+<p>If you see this page, the nginx web server is successfully installed and
+working. Further configuration is required.</p>
+
+<p>For online documentation and support please refer to
+<a href="http://nginx.org/">nginx.org</a>.<br/>
+Commercial support is available at
+<a href="http://nginx.com/">nginx.com</a>.</p>
+
+<p><em>Thank you for using nginx.</em></p>
+</body>
+</html>
+root@multi-pods:/usr/local/tomcat# 
+```
+
+**可以发现，Pod内的容器之间，网络是能够互相连通的。**
