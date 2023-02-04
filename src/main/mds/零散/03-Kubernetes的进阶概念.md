@@ -475,3 +475,72 @@ root@multi-pods:/usr/local/tomcat#
 
 # Pod的封装与增强-Deployment
 
+Deployment是Pod的封装与增强，可以控制Pod，使得Pod拥有多副本、自愈、扩容、缩容的功能。
+
+**可以类比为：Pod是BeanFactory，Deployment是ApplicationContext。**
+
+## Deployment的自愈能力
+
+和普通的创建Pod不同，普通Pod可以人为、非人为地被删除，删除之后Pod就消失了。但由Deployment管理的Pod，即使被人**从Pod层面**删除了，Deployment也会实时监控，并重新部署Pod。
+
+普通Pod创建Nginx、删除：
+
+```bash
+### 新建
+root@kjg-PC:~# kubectl run normal-nginx --image=nginx
+pod/normal-nginx created
+root@kjg-PC:~# kubectl get pods -n default
+NAME           READY   STATUS    RESTARTS   AGE
+normal-nginx   1/1     Running   0          58s
+
+
+### 删除
+root@kjg-PC:~# kubectl delete pod normal-nginx
+pod "normal-nginx" deleted
+root@kjg-PC:~# kubectl get pods -n default
+No resources found in default namespace.
+```
+
+Deployment创建Pod（**可以看到，由Deployment创建的Pod有个后缀**），从Pod层面删除：
+
+```bash
+### 新建
+root@kjg-PC:~# kubectl create deployment deploy-nginx --image=nginx
+deployment.apps/deploy-nginx created
+root@kjg-PC:~# kubectl get pods -n default
+NAME                            READY   STATUS    RESTARTS   AGE
+deploy-nginx-8458f6dbbb-nzdwh   1/1     Running   0          8s
+
+### 删除
+root@kjg-PC:~# kubectl delete pod deploy-nginx-8458f6dbbb-nzdwh
+pod "deploy-nginx-8458f6dbbb-nzdwh" deleted
+
+### 发现delopy-nginx重建，后缀发生变化（ nzdwh → 2rw4x ）
+root@kjg-PC:~# kubectl get pods -n default
+NAME                            READY   STATUS    RESTARTS   AGE
+deploy-nginx-8458f6dbbb-nzdwh   1/1     Running   0          3m56s
+root@kjg-PC:~# kubectl get pods -n default
+NAME                            READY   STATUS              RESTARTS   AGE
+deploy-nginx-8458f6dbbb-2rw4x   0/1     ContainerCreating   0          2s
+root@kjg-PC:~# kubectl get pods -n default
+NAME                            READY   STATUS    RESTARTS   AGE
+deploy-nginx-8458f6dbbb-2rw4x   1/1     Running   0          74s
+
+
+
+
+
+
+### 我再删除一次2rw4x
+root@kjg-PC:~# kubectl delete pod deploy-nginx-8458f6dbbb-2rw4x
+pod "deploy-nginx-8458f6dbbb-2rw4x" deleted
+
+### 发现deploy-nginx又重建了，后缀变成了dfb4n
+root@kjg-PC:~# kubectl get pods -n default
+NAME                            READY   STATUS              RESTARTS   AGE
+deploy-nginx-8458f6dbbb-dfb4n   0/1     ContainerCreating   0          2s
+root@kjg-PC:~# kubectl get pods -n default
+NAME                            READY   STATUS    RESTARTS   AGE
+deploy-nginx-8458f6dbbb-dfb4n   1/1     Running   0          44s
+```
+
