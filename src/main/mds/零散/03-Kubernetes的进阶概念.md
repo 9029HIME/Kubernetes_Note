@@ -135,6 +135,14 @@ Commercial support is available at
 
 成功！
 
+# 其他工作负载（看完本篇后再看）
+
+1. Pod增强 除了Deployment这种工作负载外，还有其他3类不同的工作负载。不同工作负载有各自的特性。
+2. Deployment适合部署无状态的应用，比如微服务实例，它的特点是**应用不存储关键数据**、提供多副本的功能。比如订单微服务，如果访问量激增，可以直接扩容应对。
+3. StatefulSet适合部署有状态的应用，比如MySQL、Redis、RabbitMQ，这些应用很关心数据的一致性，因此StatefulSet会提供稳定的存储功能、网络功能。
+4. DaemonSet适合部署机器守护型应用，比如日志处理、**每台机子最多部署一份实例**。
+5. Job/CronJob：定时任务部署，比如垃圾清理组件，能够指定时间运行。
+
 # 隔离资源-Namespace
 
 ## 是什么
@@ -805,3 +813,70 @@ multi-deploy-nginx-785f995c7d-qnb5n   1/1     Running   0          8m4s   172.31
 
 
 
+## 滚动更新
+
+### 过程
+
+假设Kubernetes已经跑着一个Deployment，这个Deployment的Pod1有3个副本，均匀地分布在Master和Node上。通过Nginx挡在最外层，接收外部请求，转发到Kubernetes集群：
+
+![04](03-Kubernetes的进阶概念.assets/04.png)
+
+现在Pod1这个应用进行了版本迭代，应用新版本 打包成 **镜像新版本** 发布到镜像仓库里。现在需要Deployment升级Pod1到新版本，使用滚动更新的话是这样的：
+
+**核心过程是：先将某个节点的流量访问关闭，等待该节点的Pod1更新为Version2后，再将流量恢复。**
+
+![05](03-Kubernetes的进阶概念.assets/05.png)
+
+值得注意的是，在某个节点恢复流量后，本质对外暴露的是新版本应用。如果此时其他节点还未更新，有可能会导致 **用户两次请求的应用版本不一致**。这本质和灰度发布的数据一致性问题一样，**我相信这有成熟的解决方案，只是目前我还不清楚**。
+
+### 实践
+
+可以通过kubectl，直接修改 deployment的 pod的 nginx容器的镜像，从而实现滚动更新的过程：
+
+```bash
+root@kjg-PC:~# kubectl set image deploy/multi-deploy-nginx nginx=nginx:1.16.1  --record
+deployment.apps/multi-deploy-nginx image updated
+root@kjg-PC:~# kubectl get pods -n default
+NAME                                  READY   STATUS              RESTARTS   AGE
+multi-deploy-nginx-785f995c7d-2qn8l   1/1     Running             0          100m
+multi-deploy-nginx-785f995c7d-qnb5n   1/1     Running             0          49m
+multi-deploy-nginx-7d859575f5-d9cgq   0/1     ContainerCreating   0          21s
+root@kjg-PC:~# kubectl get pods -n default
+NAME                                  READY   STATUS    RESTARTS   AGE
+multi-deploy-nginx-7d859575f5-d9cgq   1/1     Running   0          52s
+multi-deploy-nginx-7d859575f5-hggs4   1/1     Running   0          17s
+```
+
+可以看到 d9cqg和hggs4正在逐渐替代2qn8l和qnb5n，只有新Pod启动后，才会将旧Pod给Kill掉。
+
+## 版本回退
+
+刚才将 deployment的 pod的 nginx容器的镜像改为1.16.1版本，现在想回滚到上一版，要怎么做呢？
+
+先查看multi-deploy-nginx的历史记录：
+
+```bash
+root@kjg-PC:~# kubectl rollout history deploy/multi-deploy-nginx
+deployment.apps/multi-deploy-nginx 
+REVISION  CHANGE-CAUSE
+1         <none>
+2         kubectl set image deploy/multi-deploy-nginx nginx=nginx:1.16.1 --record=true
+```
+
+其中REVISION1是上一个版本，REVISION2是最新版本，有了REVISION号，就能够回滚：
+
+```bash
+root@kjg-PC:~# kubectl rollout undo deploy/multi-deploy-nginx --to-revision=1
+deployment.apps/multi-deploy-nginx rolled back
+root@kjg-PC:~# kubectl get pods -n default
+NAME                                  READY   STATUS              RESTARTS   AGE
+multi-deploy-nginx-785f995c7d-lxpps   0/1     ContainerCreating   0          6s
+multi-deploy-nginx-7d859575f5-d9cgq   1/1     Running             0          8m13s
+multi-deploy-nginx-7d859575f5-hggs4   1/1     Running             0          7m38s
+root@kjg-PC:~# kubectl get pods -n default
+NAME                                  READY   STATUS    RESTARTS   AGE
+multi-deploy-nginx-785f995c7d-lxpps   1/1     Running   0          31s
+multi-deploy-nginx-785f995c7d-m4bxj   1/1     Running   0          12s
+```
+
+和滚动更新一样，版本回退也是新创建pod，创建成功后再替代。
