@@ -1,3 +1,140 @@
+# 疑难杂症（看完后本篇后再看）
+
+## 无法访问其他节点的Pod，提示connect refused
+
+新建了multi-pods后，在Master通过curl访问目标地址80端口，提示connect refused。
+
+查看Pod状态，发现calico有一个Pod没起来：
+
+```bash
+root@kjg-PC:~# kubectl get pods -A
+NAMESPACE              NAME                                         READY   STATUS    RESTARTS   AGE
+default                multi-pods                                   2/2     Running   0          41m
+kube-system            calico-kube-controllers-5bb48c55fd-r6txn     1/1     Running   9          6d1h
+kube-system            calico-node-9pxml                            1/1     Running   5          6d
+kube-system            calico-node-bvrgq                            1/1     Running   5          6d
+###这里没起来！！！！！！！！！！！
+kube-system            calico-node-cncp8                            0/1     Running   0          10s
+```
+
+通过kubectl describe看看没起来的原因：
+
+```bash
+root@kjg-PC:~# kubectl describe pod calico-node-cncp8 -n kube-system
+###省略
+ect: connection refused
+  Warning  Unhealthy  74s   kubelet            Readiness probe failed: 2023-02-04 02:19:30.981 [INFO][309] confd/health.go 180: Number of node(s) with BGP peering established = 0
+calico/node is not ready: BIRD is not ready: BGP not established with 192.168.120.121,192.168.120.122
+```
+
+找到了核心错误原因：calico/node is not ready: BIRD is not ready: BGP not established with xxxx。
+
+网上找到的解决方案，可以通过修改calico配置，通过DNS来找到目标节点的地址**（前提是，Master ping Node能连通！！！）**
+
+修改calico的配置文件，找到CLUSTER_TYPE关键字，在下面新增以下配置（**其实顺序没要求，只不过这样好找**）：
+
+```yaml
+###省略上面
+	containers:
+	  ###省略
+	  env:
+	    ###省略
+		-name: CLUSTER_TYPE
+         value: "k8s,bgp"
+         ###新增以下配置
+        -name: IP_AUTODETECTION_METHOD
+         value: "can-reach=114.114.114.114"
+```
+
+保存文件，重新部署到Kubernetes上，等待一会儿，可以看到calico的pod启动完毕：
+
+```bash
+root@kjg-PC:~# kubectl apply -f calico.yaml 
+configmap/calico-config unchanged
+customresourcedefinition.apiextensions.k8s.io/bgpconfigurations.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/bgppeers.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/blockaffinities.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/caliconodestatuses.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/clusterinformations.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/felixconfigurations.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/globalnetworkpolicies.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/globalnetworksets.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/hostendpoints.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/ipamblocks.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/ipamconfigs.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/ipamhandles.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/ippools.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/ipreservations.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/kubecontrollersconfigurations.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/networkpolicies.crd.projectcalico.org configured
+customresourcedefinition.apiextensions.k8s.io/networksets.crd.projectcalico.org configured
+clusterrole.rbac.authorization.k8s.io/calico-kube-controllers unchanged
+clusterrolebinding.rbac.authorization.k8s.io/calico-kube-controllers unchanged
+clusterrole.rbac.authorization.k8s.io/calico-node unchanged
+clusterrolebinding.rbac.authorization.k8s.io/calico-node unchanged
+daemonset.apps/calico-node configured
+serviceaccount/calico-node unchanged
+deployment.apps/calico-kube-controllers unchanged
+serviceaccount/calico-kube-controllers unchanged
+poddisruptionbudget.policy/calico-kube-controllers unchanged
+
+
+
+###等待一会儿
+root@kjg-PC:~# kubectl get pods -A
+NAMESPACE              NAME                                         READY   STATUS    RESTARTS   AGE
+default                multi-pods                                   2/2     Running   0          43m
+kube-system            calico-kube-controllers-5bb48c55fd-r6txn     1/1     Running   9          6d1h
+kube-system            calico-node-cncp8                            1/1     Running   0          2m13s
+kube-system            calico-node-nl4mm                            1/1     Running   0          90s
+kube-system            calico-node-q77lf                            1/1     Running   0          113s
+kube-system            coredns-7f89b7bc75-b2r68                     1/1     Running   9          6d1h
+kube-system            coredns-7f89b7bc75-kr2m4                     1/1     Running   9          6d1h
+kube-system            etcd-kjg-pc                                  1/1     Running   10         6d1h
+kube-system            kube-apiserver-kjg-pc                        1/1     Running   10         6d1h
+kube-system            kube-controller-manager-kjg-pc               1/1     Running   11         6d1h
+kube-system            kube-proxy-2hhr2                             1/1     Running   5          6d
+kube-system            kube-proxy-9qdgv                             1/1     Running   9          6d1h
+kube-system            kube-proxy-tkwf6                             1/1     Running   5          6d
+kube-system            kube-scheduler-kjg-pc                        1/1     Running   12         6d1h
+kubernetes-dashboard   dashboard-metrics-scraper-79c5968bdc-f88vn   1/1     Running   4          3d17h
+kubernetes-dashboard   kubernetes-dashboard-658485d5c7-4d8ml        1/1     Running   3          3d
+```
+
+再试一下请求multi-pod的nginx容器：
+
+```bash
+root@kjg-PC:~# kubectl get pod multi-pods -owide
+NAME         READY   STATUS    RESTARTS   AGE   IP             NODE       NOMINATED NODE   READINESS GATES
+multi-pods   2/2     Running   0          43m   172.31.3.195   ubuntu01   <none>           <none>
+root@kjg-PC:~# curl http://172.31.3.195
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+<style>
+html { color-scheme: light dark; }
+body { width: 35em; margin: 0 auto;
+font-family: Tahoma, Verdana, Arial, sans-serif; }
+</style>
+</head>
+<body>
+<h1>Welcome to nginx!</h1>
+<p>If you see this page, the nginx web server is successfully installed and
+working. Further configuration is required.</p>
+
+<p>For online documentation and support please refer to
+<a href="http://nginx.org/">nginx.org</a>.<br/>
+Commercial support is available at
+<a href="http://nginx.com/">nginx.com</a>.</p>
+
+<p><em>Thank you for using nginx.</em></p>
+</body>
+</html>
+```
+
+成功！
+
 # 隔离资源-Namespace
 
 ## 是什么
@@ -335,3 +472,6 @@ root@multi-pods:/usr/local/tomcat#
 ```
 
 **可以发现，Pod内的容器之间，网络是能够互相连通的。**
+
+# Pod的封装与增强-Deployment
+
