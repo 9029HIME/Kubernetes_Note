@@ -479,7 +479,7 @@ Deployment是Pod的封装与增强，可以控制Pod，使得Pod拥有多副本�
 
 **可以类比为：Pod是BeanFactory，Deployment是ApplicationContext。**
 
-## Deployment的自愈能力
+## 自愈
 
 和普通的创建Pod不同，普通Pod可以人为、非人为地被删除，删除之后Pod就消失了。但由Deployment管理的Pod，即使被人**从Pod层面**删除了，Deployment也会实时监控，并重新部署Pod。
 
@@ -543,4 +543,265 @@ root@kjg-PC:~# kubectl get pods -n default
 NAME                            READY   STATUS    RESTARTS   AGE
 deploy-nginx-8458f6dbbb-dfb4n   1/1     Running   0          44s
 ```
+
+如果真的想删除deploy-nginx，只能**从Deploy层面**去删除，然后再删除Pod：
+
+```bash
+### 先删除eploy
+root@kjg-PC:~# kubectl get deploy
+NAME           READY   UP-TO-DATE   AVAILABLE   AGE
+deploy-nginx   1/1     1            1           108m
+root@kjg-PC:~# kubectl delete deploy deploy-nginx
+deployment.apps "deploy-nginx" deleted
+root@kjg-PC:~# kubectl get deploy
+No resources found in default namespace.
+
+### 再删除Pod
+root@kjg-PC:~# kubectl get pods -A
+NAMESPACE              NAME                                         READY   STATUS    RESTARTS   AGE
+default                deploy-nginx-8458f6dbbb-dfb4n                1/1     Running   0          109m
+kube-system            calico-kube-controllers-5bb48c55fd-r6txn     1/1     Running   9          6d5h
+kube-system            calico-node-cncp8                            1/1     Running   0          3h52m
+kube-system            calico-node-nl4mm                            1/1     Running   0          3h51m
+kube-system            calico-node-q77lf                            1/1     Running   0          3h52m
+kube-system            coredns-7f89b7bc75-b2r68                     1/1     Running   9          6d5h
+kube-system            coredns-7f89b7bc75-kr2m4                     1/1     Running   9          6d5h
+kube-system            etcd-kjg-pc                                  1/1     Running   10         6d5h
+kube-system            kube-apiserver-kjg-pc                        1/1     Running   10         6d5h
+kube-system            kube-controller-manager-kjg-pc               1/1     Running   11         6d5h
+kube-system            kube-proxy-2hhr2                             1/1     Running   5          6d4h
+kube-system            kube-proxy-9qdgv                             1/1     Running   9          6d5h
+kube-system            kube-proxy-tkwf6                             1/1     Running   5          6d4h
+kube-system            kube-scheduler-kjg-pc                        1/1     Running   12         6d5h
+kubernetes-dashboard   dashboard-metrics-scraper-79c5968bdc-f88vn   1/1     Running   4          3d21h
+kubernetes-dashboard   kubernetes-dashboard-658485d5c7-4d8ml        1/1     Running   3          3d4h
+root@kjg-PC:~# kubectl get pods 
+NAME                            READY   STATUS    RESTARTS   AGE
+deploy-nginx-8458f6dbbb-dfb4n   1/1     Running   0          109m
+root@kjg-PC:~# kubectl delete pod deploy-nginx-8458f6dbbb-dfb4n
+pod "deploy-nginx-8458f6dbbb-dfb4n" deleted
+root@kjg-PC:~# kubectl get pods 
+No resources found in default namespace.
+```
+
+
+
+## 副本
+
+使用命令行创建一个deploy-multi-nginx的部署，指定副本数为3（这里的副本可以理解为Kafka的Replica，包含所有的数量）：
+
+```bash
+root@kjg-PC:~# kubectl create deploy multi-deploy-nginx --image=nginx --replicas=3
+deployment.apps/multi-deploy-nginx created
+root@kjg-PC:~# kubectl get deploy	#可以看到multi-deploy-nginx的副本正在部署中（这里不知道为什么好久）
+NAME                 READY   UP-TO-DATE   AVAILABLE   AGE
+multi-deploy-nginx   0/3     0            0           9s
+root@kjg-PC:~# kubectl get deploy
+NAME                 READY   UP-TO-DATE   AVAILABLE   AGE
+multi-deploy-nginx   3/3     3            3           4m27s
+```
+
+顺便再看一看Pod的状态，可以看到有两个在ubuntu01，一个在ubuntu02：
+
+```bash
+root@kjg-PC:~# kubectl get pods -owide
+NAME                                  READY   STATUS    RESTARTS   AGE     IP             NODE       NOMINATED NODE   READINESS GATES
+multi-deploy-nginx-785f995c7d-2qn8l   1/1     Running   0          3m27s   172.31.79.6    ubuntu02   <none>           <none>
+multi-deploy-nginx-785f995c7d-5f8lg   1/1     Running   0          3m27s   172.31.3.200   ubuntu01   <none>           <none>
+multi-deploy-nginx-785f995c7d-phx67   1/1     Running   0          3m27s   172.31.3.201   ubuntu01   <none>           <none>
+
+
+
+###curl也是没问题的。
+root@kjg-PC:~# curl http://172.31.79.6
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+<style>
+html { color-scheme: light dark; }
+body { width: 35em; margin: 0 auto;
+font-family: Tahoma, Verdana, Arial, sans-serif; }
+</style>
+</head>
+<body>
+<h1>Welcome to nginx!</h1>
+<p>If you see this page, the nginx web server is successfully installed and
+working. Further configuration is required.</p>
+
+<p>For online documentation and support please refer to
+<a href="http://nginx.org/">nginx.org</a>.<br/>
+Commercial support is available at
+<a href="http://nginx.com/">nginx.com</a>.</p>
+
+<p><em>Thank you for using nginx.</em></p>
+</body>
+</html>
+
+
+
+
+
+root@kjg-PC:~# curl http://172.31.3.200
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+<style>
+html { color-scheme: light dark; }
+body { width: 35em; margin: 0 auto;
+font-family: Tahoma, Verdana, Arial, sans-serif; }
+</style>
+</head>
+<body>
+<h1>Welcome to nginx!</h1>
+<p>If you see this page, the nginx web server is successfully installed and
+working. Further configuration is required.</p>
+
+<p>For online documentation and support please refer to
+<a href="http://nginx.org/">nginx.org</a>.<br/>
+Commercial support is available at
+<a href="http://nginx.com/">nginx.com</a>.</p>
+
+<p><em>Thank you for using nginx.</em></p>
+</body>
+</html>
+
+
+
+
+
+root@kjg-PC:~# curl http://172.31.3.201
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+<style>
+html { color-scheme: light dark; }
+body { width: 35em; margin: 0 auto;
+font-family: Tahoma, Verdana, Arial, sans-serif; }
+</style>
+</head>
+<body>
+<h1>Welcome to nginx!</h1>
+<p>If you see this page, the nginx web server is successfully installed and
+working. Further configuration is required.</p>
+
+<p>For online documentation and support please refer to
+<a href="http://nginx.org/">nginx.org</a>.<br/>
+Commercial support is available at
+<a href="http://nginx.com/">nginx.com</a>.</p>
+
+<p><em>Thank you for using nginx.</em></p>
+</body>
+</html>
+```
+
+## 扩容、缩容
+
+以上面的multi-deploy-nginx为例，原本副本数是3，现在要改为6：
+
+```bash
+root@kjg-PC:~# kubectl scale deploy/multi-deploy-nginx --replicas=6
+deployment.apps/multi-deploy-nginx scaled
+root@kjg-PC:~# kubectl get deploy
+NAME                 READY   UP-TO-DATE   AVAILABLE   AGE
+multi-deploy-nginx   3/6     6            3           31m
+root@kjg-PC:~# kubectl get deploy
+NAME                 READY   UP-TO-DATE   AVAILABLE   AGE
+multi-deploy-nginx   6/6     6            6           33m
+```
+
+再看一下每一个Pod，具体在哪里：
+
+```bash
+root@kjg-PC:~# kubectl get pods -n default -owide
+NAME                                  READY   STATUS    RESTARTS   AGE     IP             NODE       NOMINATED NODE   READINESS GATES
+multi-deploy-nginx-785f995c7d-2qn8l   1/1     Running   0          31m     172.31.79.6    ubuntu02   <none>           <none>
+multi-deploy-nginx-785f995c7d-5f8lg   1/1     Running   0          31m     172.31.3.200   ubuntu01   <none>           <none>
+multi-deploy-nginx-785f995c7d-htrc6   1/1     Running   0          2m27s   172.31.3.202   ubuntu01   <none>           <none>
+multi-deploy-nginx-785f995c7d-mdmkd   1/1     Running   0          2m27s   172.31.79.7    ubuntu02   <none>           <none>
+multi-deploy-nginx-785f995c7d-phx67   1/1     Running   0          31m     172.31.3.201   ubuntu01   <none>           <none>
+multi-deploy-nginx-785f995c7d-vx2dn   1/1     Running   0          2m27s   172.31.79.8    ubuntu02   <none>           <none>
+```
+
+每个都访问试了一下，没有问题。
+
+现在我又嫌太多了，想把副本数改为4：
+
+```bash
+root@kjg-PC:~# kubectl scale deploy/multi-deploy-nginx --replicas=4
+deployment.apps/multi-deploy-nginx scaled
+root@kjg-PC:~# kubectl get deploy
+NAME                 READY   UP-TO-DATE   AVAILABLE   AGE
+multi-deploy-nginx   4/4     4            4           35m
+```
+
+看得出来，缩容很快，再看看每个Pod的位置：
+
+```bash
+NAME                                  READY   STATUS    RESTARTS   AGE     IP             NODE       NOMINATED NODE   READINESS GATES
+multi-deploy-nginx-785f995c7d-2qn8l   1/1     Running   0          33m     172.31.79.6    ubuntu02   <none>           <none>
+multi-deploy-nginx-785f995c7d-5f8lg   1/1     Running   0          33m     172.31.3.200   ubuntu01   <none>           <none>
+multi-deploy-nginx-785f995c7d-htrc6   1/1     Running   0          4m36s   172.31.3.202   ubuntu01   <none>           <none>
+multi-deploy-nginx-785f995c7d-phx67   1/1     Running   0          33m     172.31.3.201   ubuntu01   <none>           <none>
+```
+
+## 故障转移
+
+还是以上满的multi-deploy-nginx为例，为了方便观察，将副本数改为2：
+
+```bash
+root@kjg-PC:~# kubectl scale deploy/multi-deploy-nginx --replicas=2
+deployment.apps/multi-deploy-nginx scaled
+root@kjg-PC:~# kubectl get pods -n default -owide
+NAME                                  READY   STATUS    RESTARTS   AGE   IP             NODE       NOMINATED NODE   READINESS GATES
+multi-deploy-nginx-785f995c7d-2qn8l   1/1     Running   0          37m   172.31.79.6    ubuntu02   <none>           <none>
+multi-deploy-nginx-785f995c7d-5f8lg   1/1     Running   0          37m   172.31.3.200   ubuntu01   <none>           <none>
+```
+
+我现在把ubuntu01关机，也就是5f8lg这个Pod会在Deployment失联。Kubernetes已经感知到其中一个Pod不可用了，**但要等5分钟，Kubernetes才能故障转移**：
+
+```bash
+root@kjg-PC:~# kubectl get deploy -n default && echo
+NAME                 READY   UP-TO-DATE   AVAILABLE   AGE
+multi-deploy-nginx   1/2     2            1           48m
+
+root@kjg-PC:~# kubectl get pods -n default -owide
+NAME                                  READY   STATUS    RESTARTS   AGE   IP             NODE       NOMINATED NODE   READINESS GATES
+multi-deploy-nginx-785f995c7d-2qn8l   1/1     Running   0          48m   172.31.79.6    ubuntu02   <none>           <none>
+multi-deploy-nginx-785f995c7d-5f8lg   1/1     Running   0          48m   172.31.3.200   ubuntu01   <none>           <none>
+
+
+### 5分钟后。
+
+
+
+root@kjg-PC:~# kubectl get deploy -n default && echo
+NAME                 READY   UP-TO-DATE   AVAILABLE   AGE
+multi-deploy-nginx   2/2     2            2           54m
+root@kjg-PC:~# kubectl get pods -n default -owide
+NAME                                  READY   STATUS        RESTARTS   AGE   IP             NODE       NOMINATED NODE   READINESS GATES
+multi-deploy-nginx-785f995c7d-2qn8l   1/1     Running       0          51m   172.31.79.6    ubuntu02   <none>           <none>
+multi-deploy-nginx-785f995c7d-5f8lg   1/1     Terminating   0          51m   172.31.3.200   ubuntu01   <none>           <none>
+multi-deploy-nginx-785f995c7d-qnb5n   1/1     Running       0          37s   172.31.79.9    ubuntu02   <none>           <none>
+```
+
+可以发现，5f8lg因为ubuntu01的宕机而被终止，Kubernetes新建了一个qnb5n的Pod，转移到ubuntu02上。
+
+即使后面ubuntu01恢复了，5f8lg也不会重新运行在ubuntu01，而是直接在pod记录里消失：
+
+```bash
+root@kjg-PC:~# kubectl get nodes
+NAME       STATUS   ROLES                  AGE    VERSION
+kjg-pc     Ready    control-plane,master   6d6h   v1.20.9
+ubuntu01   Ready    <none>                 6d6h   v1.20.9
+ubuntu02   Ready    <none>                 6d6h   v1.20.9
+root@kjg-PC:~# kubectl get pods -n default -owide
+NAME                                  READY   STATUS    RESTARTS   AGE    IP            NODE       NOMINATED NODE   READINESS GATES
+multi-deploy-nginx-785f995c7d-2qn8l   1/1     Running   0          59m    172.31.79.6   ubuntu02   <none>           <none>
+multi-deploy-nginx-785f995c7d-qnb5n   1/1     Running   0          8m4s   172.31.79.9   ubuntu02   <none>           <none>
+```
+
+
 
