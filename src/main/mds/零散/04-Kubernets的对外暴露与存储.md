@@ -23,7 +23,9 @@
 
 负载均衡能理解，那什么是健康返回？其实就是Service会监控每个Pod1的状态，如果其中一个Pod1挂了，那么在Pod1自愈 或 故障转移 之前，Service不会将请求转发到这个挂了的Pod1。
 
-**值得注意的是：ClusterIP模式的Service，只允许Kubernetes环境内的容器进行访问。**如果在Kubernetes环境外（比如物理机本身、物理机以外的请求）进行访问，是不允许的。
+**值得注意的是：ClusterIP模式的Service，只允许Kubernetes环境内的容器进行访问。**如果在Kubernetes环境外（物理机以外的请求）进行访问，是不允许的。
+
+**即使是本机调用，也仅限于ClusterIP的方式，localhost和服务名的方式是不允许的**。
 
 那有什么好办法呢？我总不能整个环境都部署到Kubernetes环境里吧？这时候可以用NodePort模式：
 
