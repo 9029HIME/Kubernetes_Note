@@ -35,4 +35,25 @@
 
 ## 实践
 
+# Kubernetes的“Nginx”-Ingress
+
+## 概念
+
+**Ingress底层是通过nginx来实现的，可以理解为Nginx在Kubernetes的适配版，用来对Service进行再一层封装。**
+
+有了Service的概念，再看Ingress就比较好理解了，假设有这么一个场景，以**用户、库存、订单**服务为例，每1个服务对应1个Service，每1个服务对应的实例对应N个Pods，部署在3个机子组成的Kubernetes集群里（同1种颜色代表同1个Service）：
+
+![05](04-Kubernets的对外暴露与存储.assets/05.png)
+
+即使前面说过，Service可以通过NodePort的方式对外暴露，在这种场景下，不同Service本质通过端口进行区分。假如前端需要访问 订单、用户、库存服务，是不是要维护3份不同的端口号？这样比较麻烦，因此可以使用Ingress对Service再进行一层封装：
+
+![06](04-Kubernets的对外暴露与存储.assets/06.png)
+
+新建一个名叫my-ing的Ingress，它根据/order/xxx关联订单服务、/user/xxx关联用户服务、/stock/xxx关联库存服务。同时，my-ing会选择2个随机IP，分别映射物理机的80和443端口。
+
+![07](04-Kubernets的对外暴露与存储.assets/07.png)
+
+这样，当外部HTTP请求通过 ${任意IP地址} + ${随机端口} + ${访问路径}的方式，经过Ingress的转发，可以到达集群内不同的Service。对于外部而言，只有固定端口，至于IP可以通过LVS来实现固定IP。
+
+## 实践
 
