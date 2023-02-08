@@ -35,6 +35,121 @@
 
 ## 实践
 
+### 准备好Deploy
+
+以两个Nginx为Pod的Deploy为例：
+
+```bash
+root@kjg-PC:~# kubectl get deploy
+NAME                 READY   UP-TO-DATE   AVAILABLE   AGE
+multi-deploy-nginx   2/2     2            2           4d5h
+root@kjg-PC:~# kubectl get pods -owide
+NAME                                  READY   STATUS    RESTARTS   AGE    IP             NODE       NOMINATED NODE   READINESS GATES
+multi-deploy-nginx-785f995c7d-cjf5h   1/1     Running   0          4m4s   172.31.3.208   ubuntu01   <none>           <none>
+multi-deploy-nginx-785f995c7d-lxpps   1/1     Running   2          4d3h   172.31.79.14   ubuntu02   <none>           <none>
+root@kjg-PC:~# 
+```
+
+为了方便观看，我还是将nginx里面的欢迎页改一下：
+
+```bash
+# 修改cjf5h的欢迎页为nginx1111
+root@kjg-PC:~# kubectl exec -it multi-deploy-nginx-785f995c7d-cjf5h -c nginx -- /bin/bash
+root@multi-deploy-nginx-785f995c7d-cjf5h:/# cd /usr/share/nginx/html/
+root@multi-deploy-nginx-785f995c7d-cjf5h:/usr/share/nginx/html# ls
+50x.html  index.html
+root@multi-deploy-nginx-785f995c7d-cjf5h:/usr/share/nginx/html# echo nginx1111 > index.html
+root@multi-deploy-nginx-785f995c7d-cjf5h:/usr/share/nginx/html# exit
+exit
+root@kjg-PC:~# curl http://172.31.3.208
+nginx1111
+
+
+
+# 修改lxpps的欢迎页为nginx2222：
+root@kjg-PC:~# kubectl exec -it multi-deploy-nginx-785f995c7d-lxpps -c nginx -- /bin/bash
+root@multi-deploy-nginx-785f995c7d-lxpps:/# cd /usr/share/nginx/html/
+root@multi-deploy-nginx-785f995c7d-lxpps:/usr/share/nginx/html# echo nginx2222 > index.html 
+root@multi-deploy-nginx-785f995c7d-lxpps:/usr/share/nginx/html# exit
+exit
+root@kjg-PC:~# curl http://172.31.79.14
+nginx2222
+```
+
+### 创建Service
+
+给multi-deploy-nginx的nginx pod创建Service，对外暴露8000端口，采用ClusterIP的方式：
+
+```bash
+root@kjg-PC:~# kubectl expose deployment multi-deploy-nginx --port=8000 --target-port=80 --type=ClusterIP
+service/multi-deploy-nginx exposed
+root@kjg-PC:~# kubectl get service
+NAME                 TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+kubernetes           ClusterIP   10.96.0.1       <none>        443/TCP    10d
+multi-deploy-nginx   ClusterIP   10.96.142.162   <none>        8000/TCP   10s
+```
+
+### 负载均衡的体现
+
+可以发现，通过本机通过CLUSTER-IP访问Service，实现了负载均衡的效果：
+
+```bash
+root@kjg-PC:~# curl http://10.96.142.162:8000
+nginx2222
+root@kjg-PC:~# curl http://10.96.142.162:8000
+nginx2222
+root@kjg-PC:~# curl http://10.96.142.162:8000
+nginx2222
+root@kjg-PC:~# curl http://10.96.142.162:8000
+nginx1111
+root@kjg-PC:~# curl http://10.96.142.162:8000
+nginx2222
+root@kjg-PC:~# curl http://10.96.142.162:8000
+nginx1111
+root@kjg-PC:~# curl http://10.96.142.162:8000
+nginx2222
+
+root@kjg-PC:~# curl http://multi-deploy-nginx.default.svc:8000
+curl: (6) Could not resolve host: multi-deploy-nginx.default.svc
+```
+
+就算新开一个Pod，也能对这个Service进行负载均衡访问：
+
+```bash
+root@kjg-PC:~# kubectl run pod-tomcat --image=tomcat
+pod/pod-tomcat created
+root@kjg-PC:~# kubectl get pods
+NAME                                  READY   STATUS    RESTARTS   AGE
+multi-deploy-nginx-785f995c7d-cjf5h   1/1     Running   0          19m
+multi-deploy-nginx-785f995c7d-lxpps   1/1     Running   2          4d4h
+pod-tomcat                            1/1     Running   0          115s
+root@kjg-PC:~# kubectl exec -it pod-tomcat -- /bin/bash
+root@pod-tomcat:/usr/local/tomcat# curl http://10.96.142.162:8000
+nginx1111
+root@pod-tomcat:/usr/local/tomcat# curl http://10.96.142.162:8000
+nginx2222
+root@pod-tomcat:/usr/local/tomcat# curl http://10.96.142.162:8000
+nginx1111
+root@pod-tomcat:/usr/local/tomcat# curl http://10.96.142.162:8000
+nginx2222
+
+
+root@pod-tomcat:/usr/local/tomcat# curl http://multi-deploy-nginx.default.svc:8000
+nginx2222
+root@pod-tomcat:/usr/local/tomcat# curl http://multi-deploy-nginx.default.svc:8000
+nginx2222
+root@pod-tomcat:/usr/local/tomcat# curl http://multi-deploy-nginx.default.svc:8000
+nginx2222
+root@pod-tomcat:/usr/local/tomcat# curl http://multi-deploy-nginx.default.svc:8000
+nginx2222
+root@pod-tomcat:/usr/local/tomcat# curl http://multi-deploy-nginx.default.svc:8000
+nginx1111
+root@pod-tomcat:/usr/local/tomcat# curl http://multi-deploy-nginx.default.svc:8000
+nginx2222
+root@pod-tomcat:/usr/local/tomcat# curl http://multi-deploy-nginx.default.svc:8000
+nginx1111
+```
+
 # Kubernetes的“Nginx”-Ingress
 
 ## 概念
