@@ -87,3 +87,73 @@ root@kjg-PC:~# cat /nfs/data/test_nfs_01
 ubuntu02
 ```
 
+## 挂载Pod到NFS
+
+给/nfs/data目录下创建一个nginx_volume文件夹：
+
+```bash
+root@kjg-PC:/nfs/data# mkdir -p /nfs/data/nginx_volume
+```
+
+之前我在实践Service和Ingress的时候，用到1个由2个Nginx Pod组成的Deploy：
+
+```bash
+root@kjg-PC:/nfs/data# kubectl get deploy
+NAME                  READY   UP-TO-DATE   AVAILABLE   AGE
+multi-deploy-nginx    2/2     2            2           10d
+```
+
+直接复用它，修改这个Deploy的配置文件：
+
+```bash
+root@kjg-PC:/nfs/data# kubectl edit deploy multi-deploy-nginx
+deployment.apps/multi-deploy-nginx edited
+```
+
+红框为新增内容：
+
+![04](05-Kubernets的存储.assets/04.png)
+
+挂载完成后，看一下nginx容器的目录，可以发现/usr/share/nginx/html的内容丢失了：
+
+```bash
+root@kjg-PC:/nfs/data/nginx_volume# kubectl exec -it multi-deploy-nginx-54754c5c67-4c975 -- /bin/bash
+root@multi-deploy-nginx-54754c5c67-4c975:/# ls /usr/share/nginx/html/
+root@multi-deploy-nginx-54754c5c67-4c975:/# 
+```
+
+因为挂载到NFS后，默认会使用挂载目录的内容，而nginx_volume目录是刚才新建的，肯定没有内容，我往里面加一个index.html试试：
+
+```bash
+root@kjg-PC:/nfs/data/nginx_volume# cd /nfs/data/nginx_volume/
+root@kjg-PC:/nfs/data/nginx_volume# echo "hello! nfs!" > index.html
+```
+
+再回去看一眼：
+
+```bash
+root@kjg-PC:/nfs/data/nginx_volume# kubectl exec -it multi-deploy-nginx-54754c5c67-4c975 -- /bin/bash
+root@multi-deploy-nginx-54754c5c67-4c975:/# ls /usr/share/nginx/html/
+index.html
+root@multi-deploy-nginx-54754c5c67-4c975:/# exit
+```
+
+可以看到，容器内的文件也生成了，试着访问一下这个Deploy之前封装的Service，能得到hello nfs的内容：
+
+```bash
+root@kjg-PC:/nfs/data/nginx_volume# kubectl get service
+NAME                  TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+kubernetes            ClusterIP   10.96.0.1       <none>        443/TCP    16d
+multi-deploy-nginx    ClusterIP   10.96.142.162   <none>        8000/TCP   5d18h
+multi-deploy-tomcat   ClusterIP   10.96.28.201    <none>        8001/TCP   5d6h
+root@kjg-PC:/nfs/data/nginx_volume# curl http://10.96.142.162:8000
+hello! nfs!
+root@kjg-PC:/nfs/data/nginx_volume# curl http://10.96.142.162:8000
+hello! nfs!
+root@kjg-PC:/nfs/data/nginx_volume# curl http://10.96.142.162:8000
+hello! nfs!
+root@kjg-PC:/nfs/data/nginx_volume# curl http://10.96.142.162:8000
+hello! nfs!
+```
+
+挂载成功。
