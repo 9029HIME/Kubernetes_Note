@@ -157,3 +157,193 @@ hello! nfs!
 ```
 
 挂载成功。
+
+# PV与PVC
+
+## PV与PVC的引出
+
+上面使用Pod直接挂载目录，有以下3个缺陷：
+
+1. 需要手动创建挂载目录。
+2. Pod被删除后，挂载卷的内容不会被删除，我得手动去找对应的目录删除。
+3. 挂载卷的使用空间没有限制。
+
+因此Kubernetes对挂载卷的使用，封装了一层PV与PVC：
+
+PV：持久卷，是挂载目录的一层封装，本质是上面的/nfs/data/nginx_volume。
+
+PVC：持久卷申明，用来申请持久卷。
+
+什么意思呢？通过PV界定一块挂在卷的大小，当Pod需要挂载卷的时候，通过PVC来申请使用PV，当Pod需要被删除的时候，只要指定删除PVC，那么挂载卷对应的数据也会被删除。如下图：
+
+![05](05-Kubernets的存储.assets/05.png)
+
+我预先申请一块PV，它的挂载地址是/nfs/data/pv01，在创建PodA的时候，我提出一个PVC申请PVC01，那么在Pod初始化的时候，Kubernetes会根据PVC的大小，请求使用一块合适的PV**（我假设现在PVC01和PV01刚好合适）**。
+
+## 静态PV池的实践
+
+为什么说是静态，看到后面就知道了。
+
+### 创建5个PV
+
+有了上面的PV、PVC概念，**以及搭建好的NFS环境**。现在我尝试创建5个PV，分别指定10MB、20MB、30MB、40MB、50MB的大小：
+
+```bash
+root@kjg-PC:/nfs/data# mkdir pv01 pv02 pv03 pv04 pv05
+```
+
+```yaml
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv01
+spec:
+  capacity:
+    storage: 10M
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs
+  nfs:
+    path: /nfs/data/pv01
+    server: 192.168.120.161
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv02
+spec:
+  capacity:
+    storage: 20M
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs
+  nfs:
+    path: /nfs/data/pv02
+    server: 192.168.120.161
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv03
+spec:
+  capacity:
+    storage: 30M
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs
+  nfs:
+    path: /nfs/data/pv03
+    server: 192.168.120.161
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv04
+spec:
+  capacity:
+    storage: 40M
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs
+  nfs:
+    path: /nfs/data/pv04
+    server: 192.168.120.161
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: pv05
+spec:
+  capacity:
+    storage: 50M
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs
+  nfs:
+    path: /nfs/data/pv05
+    server: 192.168.120.161
+---
+```
+
+```bash
+root@kjg-PC:~# vim five_pv.yaml
+root@kjg-PC:~# kubectl apply -f five_pv.yaml 
+persistentvolume/pv01 created
+persistentvolume/pv02 created
+persistentvolume/pv03 created
+persistentvolume/pv04 created
+persistentvolume/pv05 created
+root@kjg-PC:~# kubectl get pv
+NAME   CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS      CLAIM   STORAGECLASS   REASON   AGE
+pv01   10M        RWX            Retain           Available           nfs                     16s
+pv02   20M        RWX            Retain           Available           nfs                     16s
+pv03   30M        RWX            Retain           Available           nfs                     16s
+pv04   40M        RWX            Retain           Available           nfs                     16s
+pv05   50M        RWX            Retain           Available           nfs                     16s
+root@kjg-PC:~# 
+```
+
+PV创建成功，均是可用状态。
+
+### 创建1个PVC
+
+这个PVC需要35M的空间
+
+```yaml
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: 35m-pvc
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 35Mi
+  storageClassName: nfs
+```
+
+```bash
+root@kjg-PC:~# vim 35m-pvc.yaml
+root@kjg-PC:~# kubectl apply -f 35m-pvc.yaml 
+persistentvolumeclaim/35m-pvc created
+root@kjg-PC:~# kubectl get pvc
+NAME      STATUS   VOLUME   CAPACITY   ACCESS MODES   STORAGECLASS   AGE
+35m-pvc   Bound    pv04     40M        RWX            nfs            2m2s
+root@kjg-PC:~# kubectl get pv
+NAME   CAPACITY   ACCESS MODES   RECLAIM POLICY   STATUS      CLAIM             STORAGECLASS   REASON   AGE
+pv01   10M        RWX            Retain           Available                     nfs                     8m14s
+pv02   20M        RWX            Retain           Available                     nfs                     8m14s
+pv03   30M        RWX            Retain           Available                     nfs                     8m14s
+pv04   40M        RWX            Retain           Bound       default/35m-pvc   nfs                     8m14s
+pv05   50M        RWX            Retain           Available                     nfs                     8m14s
+```
+
+创建成功后，可以看到原先40MB的PV被35-PVC给绑定了，其他PV仍是可用状态。**可见PVC会自动选择合适的PV进行使用**。
+
+### Deploy使用PVC
+
+一般来说，PVC的使用是和Deploy创建Pod时一起的，假如我还是以上面的multi-deploy-nginx为例，从之前的手动指定NFS挂载，使用上面申请的35MB的PVC使用：
+
+![06](05-Kubernets的存储.assets/06.png)
+
+```bash
+root@kjg-PC:~# kubectl edit deploy multi-deploy-nginx
+deployment.apps/multi-deploy-nginx edited
+root@kjg-PC:~# echo "35m-pvc" > /nfs/data/pv04/index.html
+root@kjg-PC:~# kubectl get service
+NAME                  TYPE        CLUSTER-IP      EXTERNAL-IP   PORT(S)    AGE
+kubernetes            ClusterIP   10.96.0.1       <none>        443/TCP    16d
+multi-deploy-nginx    ClusterIP   10.96.142.162   <none>        8000/TCP   5d20h
+multi-deploy-tomcat   ClusterIP   10.96.28.201    <none>        8001/TCP   5d8h
+root@kjg-PC:~# curl http://10.96.142.162:8000
+35m-pvc
+root@kjg-PC:~# curl http://10.96.142.162:8000
+35m-pvc
+root@kjg-PC:~# curl http://10.96.142.162:8000
+35m-pvc
+root@kjg-PC:~# curl http://10.96.142.162:8000
+35m-pvc
+```
+
+可以看到，修改生效了。
