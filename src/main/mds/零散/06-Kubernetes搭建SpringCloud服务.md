@@ -280,3 +280,112 @@ registryctl         goharbor/harbor-registryctl:v2.5.0   "/home/harbor/start.…
 ![02](06-Kubernetes搭建SpringCloud服务.assets/02.png)
 
 ![03](06-Kubernetes搭建SpringCloud服务.assets/03.png)
+
+## Docker使用Harbor
+
+先创建出一个用户，并且设为管理员：
+
+![04](06-Kubernetes搭建SpringCloud服务.assets/04.png)
+
+创建出一个项目，名叫cloud_01，它是本篇文章部署的微服务基础：
+
+![05](06-Kubernetes搭建SpringCloud服务.assets/05.png)
+
+给cloud_01配置刚才创建的kjg用户：
+
+![06](06-Kubernetes搭建SpringCloud服务.assets/06.png)
+
+先让Docker登录Harbor：
+
+```bash
+root@kjg-PC:~# docker login harbor.genn.com
+Username: kjg
+Password: 
+WARNING! Your password will be stored unencrypted in /root/.docker/config.json.
+Configure a credential helper to remove this warning. See
+https://docs.docker.com/engine/reference/commandline/login/#credentials-store
+
+Login Succeeded
+root@kjg-PC:~# 
+```
+
+尝试从Docker上传镜像到Harbor：
+
+```bash
+# 继续拿Nginx开刀
+root@kjg-PC:~# docker images | grep nginx
+goharbor/nginx-photon                                                      v2.5.0              5041274b8b8a        10 months ago       44MB
+nginx                                                                      latest              605c77e624dd        14 months ago       141MB
+
+# copy一个nginx镜像，改名
+root@kjg-PC:~# docker tag nginx:latest harbor.genn.com/cloud_01/nginx:aaa
+root@kjg-PC:~# docker images | grep nginx
+goharbor/nginx-photon                                                      v2.5.0              5041274b8b8a        10 months ago       44MB
+nginx                                                                      latest              605c77e624dd        14 months ago       141MB
+harbor.genn.com/cloud01/nginx                                              aaa                 605c77e624dd        14 months ago       141MB
+harbor.genn.com/cloud_01/nginx                                             aaa                 605c77e624dd        14 months ago       141MB
+
+
+# 上传镜像到harbor：
+root@kjg-PC:~# docker push harbor.genn.com/cloud_01/nginx:aaa
+The push refers to repository [harbor.genn.com/cloud_01/nginx]
+d874fd2bc83b: Pushed 
+32ce5f6a5106: Pushed 
+f1db227348d0: Pushed 
+b8d6e692a25e: Pushed 
+e379e8aedd4d: Pushed 
+2edcec3590a4: Pushed 
+aaa: digest: sha256:ee89b00528ff4f02f2405e4ee221743ebc3f8e8dd0bfd5c4c20a2fa2aaa7ede3 size: 
+```
+
+可以看到，镜像被推到harbor了：
+
+![07](06-Kubernetes搭建SpringCloud服务.assets/07.png)
+
+接下来，尝试在Ubuntu01从harbor拉取镜像：
+
+```bash
+# 先把证书和密钥发过去
+root@kjg-PC:~/cert/harbor# scp harbor.genn.com.cert harbor.genn.com.key ca.crt kjg1@ubuntu01:/etc/docker/certs.d/harbor.genn.com/
+kjg1@ubuntu01's password: 
+harbor.genn.com.cert                                                                                                                                    100% 2090     1.1MB/s   00:00    
+harbor.genn.com.key                                                                                                                                     100% 3243     1.8MB/s   00:00    
+ca.crt 
+
+
+# Ubuntu01，先将harbor地址配置到daemon.json里面：
+{
+  "registry-mirrors": ["https://82m9ar63.mirror.aliyuncs.com"],
+  "insecure-registries": ["http://harbor.genn.com"],
+  "exec-opts": ["native.cgroupdriver=systemd"],
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "100m"
+  },
+  "storage-driver": "overlay2"
+}
+# 然后进行登录
+root@ubuntu01:~# docker login harbor.genn.com
+Username: kjg
+Password: 
+WARNING! Your password will be stored unencrypted in /root/.docker/config.json.
+Configure a credential helper to remove this warning. See
+https://docs.docker.com/engine/reference/commandline/login/#credentials-store
+Login Succeeded
+
+# 最后进行拉取
+root@ubuntu01:~# docker pull harbor.genn.com/cloud_01/nginx@sha256:ee89b00528ff4f02f2405e4ee221743ebc3f8e8dd0bfd5c4c20a2fa2aaa7ede3
+harbor.genn.com/cloud_01/nginx@sha256:ee89b00528ff4f02f2405e4ee221743ebc3f8e8dd0bfd5c4c20a2fa2aaa7ede3: Pulling from cloud_01/nginx
+Digest: sha256:ee89b00528ff4f02f2405e4ee221743ebc3f8e8dd0bfd5c4c20a2fa2aaa7ede3
+Status: Downloaded newer image for harbor.genn.com/cloud_01/nginx@sha256:ee89b00528ff4f02f2405e4ee221743ebc3f8e8dd0bfd5c4c20a2fa2aaa7ede3
+harbor.genn.com/cloud_01/nginx@sha256:ee89b00528ff4f02f2405e4ee221743ebc3f8e8dd0bfd5c4c20a2fa2aaa7ede3
+
+# 检查镜像，拉取成功
+root@ubuntu01:~# docker images | grep nginx
+nginx                                                                       latest    605c77e624dd   14 months ago   141MB
+harbor.genn.com/cloud_01/nginx                                              <none>    605c77e624dd   14 months ago   141MB
+registry.cn-hangzhou.aliyuncs.com/lfy_k8s_images/ingress-nginx-controller   v0.46.0   f4a8538d4445   22 months ago   282MB
+nginx                                                                       1.16.1    dfcfd8e9a5d3   2 years ago     127MB
+```
+
+同样的操作，执行于Ubuntu02。
