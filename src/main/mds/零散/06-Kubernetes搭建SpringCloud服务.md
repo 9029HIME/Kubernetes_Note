@@ -389,3 +389,17 @@ nginx                                                                       1.16
 ```
 
 同样的操作，执行于Ubuntu02。
+
+# 微服务准备
+
+## 工程搭建
+
+为了简单示例，准备生产者、消费者模式的微服务，代码见Cloud_Order、Cloud_Stock、Stock_Feign模块。
+
+Cloud_Order对外暴露一个preOrder接口，接收请求路径的订单id，通过Stock_Feign请求Cloud_Stock。
+
+Cloud_Stock根据部署环境的环境变量$STOCK_META给Cloud_Order响应结果，Cloud_Order也根据部署环境的环境变量$ORDER_META给外部响应结果。通过着两个变量方便观察Pod的唯一性：
+
+![08](06-Kubernetes搭建SpringCloud服务.assets/08.png)
+
+## 打包镜像
