@@ -6,8 +6,17 @@
         <sourceOutputDir name="target/generated-sources/annotations" />
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
-        <module name="Kubernetes_Study" />
+        <module name="Cloud_Order" />
+        <module name="Stock_Feign" />
+        <module name="Cloud_Stock" />
       </profile>
     </annotationProcessing>
+  </component>
+  <component name="JavacSettings">
+    <option name="ADDITIONAL_OPTIONS_OVERRIDE">
+      <module name="Cloud_Order" options="-parameters" />
+      <module name="Cloud_Stock" options="-parameters" />
+      <module name="Stock_Feign" options="-parameters" />
+    </option>
   </component>
 </project>

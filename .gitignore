@@ -1,2 +1,4 @@
-# Project exclude paths
-/target/
+/Cloud_Stock/target/
+/Cloud_Order/target/
+/Stock_Feign/target/
+/.idea/
