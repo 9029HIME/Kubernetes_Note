@@ -403,3 +403,97 @@ Cloud_Stock根据部署环境的环境变量$STOCK_META给Cloud_Order响应结�
 ![08](06-Kubernetes搭建SpringCloud服务.assets/08.png)
 
 ## 打包镜像
+
+编写Dockerfile:
+
+```dockerfile
+FROM java:8
+EXPOSE 8001
+ADD Cloud_Order-1.0-SNAPSHOT.jar /
+ENTRYPOINT ["java","-jar","-Dfile-encoding=utf-8 -Xmx100M","/Cloud_Order-1.0-SNAPSHOT.jar"]
+```
+
+生成镜像：
+
+```bash
+kjg@kjg-PC:~/projects/java/Kubernetes_Study/Cloud_Order/src/main/dockerfiles$ docker build -t cloud-order .
+Sending build context to Docker daemon  36.21MB
+Step 1/4 : FROM java:8
+ ---> d23bdf5b1b1b
+Step 2/4 : EXPOSE 8001
+ ---> Using cache
+ ---> afba27cd8895
+Step 3/4 : ADD Cloud_Order-1.0-SNAPSHOT.jar /
+ ---> acb923aee3d1
+Step 4/4 : ENTRYPOINT ["java","-jar","-Dfile-encoding=utf-8 -Xmx100M","/Cloud_Order-1.0-SNAPSHOT.jar"]
+ ---> Running in cc3c15bd0938
+Removing intermediate container cc3c15bd0938
+ ---> 75c65696daf1
+Successfully built 75c65696daf1
+Successfully tagged cloud-order:latest
+```
+
+同样地处理Cloud_Stock，最终生成两个镜像：
+
+```dockerfile
+FROM java:8
+EXPOSE 9001
+ADD Cloud_Stock-1.0-SNAPSHOT.jar /
+ENTRYPOINT ["java","-jar","-Dfile-encoding=utf-8 -Xmx100M","/Cloud_Stock-1.0-SNAPSHOT.jar"]
+```
+
+## 测试容器
+
+为了防止容器内的ip注册进Nacos，启动容器的时候要指定network模式为host：
+
+```bash
+# 启动cloud-order，指定ORDER_META为this is order meta，添加nacos的host映射
+kjg@kjg-PC:~/projects/java/Kubernetes_Study/Cloud_Order/src/main/dockerfiles$ docker run -d --network=host -p 8001:8001 -e "ORDER_META=this is order meta" --add-host=kjg-pc:192.168.120.161 cloud-order --name=test-order-env
+dfef0da6b7c870a72ea4842b313b2193f3880259a0e6fa3f91abda578223ab41
+
+# 测试环境变量
+kjg@kjg-PC:~/projects/java/Kubernetes_Study/Cloud_Order/src/main/dockerfiles$ curl http://localhost:8001/order/order/env
+this is order meta
+
+# 启动cloud-meta，指定STOCK_META为8000，添加nacos的host映射
+kjg@kjg-PC:~/projects/java/Kubernetes_Study/Cloud_Order/src/main/dockerfiles$ docker run -d --network=host -p 9001:9001 -e "STOCK_META=8000" --add-host=kjg-pc:192.168.120.161 cloud-stock --name=test-stock-env
+
+# 测试请求，查看元数据是否准确
+root@kjg-PC:/usr/local/nacos/nacos/bin# curl http://localhost:8001/order/order/preOrder/1
+{"metaId":"this is order meta","orderId":1,"stock":8000}
+```
+
+## 上传镜像上传到harbor
+
+```bash
+root@kjg-PC:~# docker tag cloud-order harbor.genn.com/cloud_01/cloud-order:latest
+root@kjg-PC:~# docker tag cloud-stock harbor.genn.com/cloud_01/cloud-stock:latest
+root@kjg-PC:~# docker push harbor.genn.com/cloud_01/cloud-order:latest
+The push refers to repository [harbor.genn.com/cloud_01/cloud-order]
+484339410427: Pushed 
+35c20f26d188: Pushed 
+c3fe59dd9556: Pushed 
+6ed1a81ba5b6: Pushed 
+a3483ce177ce: Pushed 
+ce6c8756685b: Pushed 
+30339f20ced0: Pushed 
+0eb22bfb707d: Pushed 
+a2ae92ffcd29: Pushed 
+latest: digest: sha256:d1725b75325b0ef126fde6485b6e1a7fadc28ba1b3b5cfdf18a612ee24ad27ed size: 2212
+root@kjg-PC:~# docker push harbor.genn.com/cloud_01/cloud-stock:latest
+The push refers to repository [harbor.genn.com/cloud_01/cloud-stock]
+ce6f96496618: Pushed 
+35c20f26d188: Mounted from cloud_01/cloud-order 
+c3fe59dd9556: Mounted from cloud_01/cloud-order 
+6ed1a81ba5b6: Mounted from cloud_01/cloud-order 
+a3483ce177ce: Mounted from cloud_01/cloud-order 
+ce6c8756685b: Mounted from cloud_01/cloud-order 
+30339f20ced0: Mounted from cloud_01/cloud-order 
+0eb22bfb707d: Mounted from cloud_01/cloud-order 
+a2ae92ffcd29: Mounted from cloud_01/cloud-order 
+latest: digest: sha256:131a1ba5334144845f941176edf118a915e8508aa09bf67927919b80e1dde093 size: 2212
+```
+
+查看harbor，镜像成功上传：
+
+![09](06-Kubernetes搭建SpringCloud服务.assets/09.png)
