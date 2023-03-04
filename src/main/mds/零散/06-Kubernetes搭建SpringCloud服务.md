@@ -615,4 +615,284 @@ root@kjg-PC:~/cloud# curl http://172.31.3.221:8001/order/order/preOrder/2
 
 ## Deployment
 
+只有Pod无法发挥Kubernetes的自动恢复、故障转移能力，所以最好封装一层Deployment：
+
+```bash
+# 删除原先的2个pod
+root@kjg-PC:~/cloud# kubectl delete pod cloud-order-pod -n cloud
+pod "cloud-order-pod" deleted
+root@kjg-PC:~/cloud# kubectl delete pod cloud-stock-pod -n cloud
+pod "cloud-stock-pod" deleted
+root@kjg-PC:~/cloud# kubectl get pods -n cloud
+No resources found in cloud namespace.
+
+root@kjg-PC:~/cloud# vim cloud-stock-deployment.yaml
+###########################以下是cloud-stock的deployment配置###########################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: cloud
+  name: cloud-stock-deployment
+spec:
+  replicas: 2 # 副本数量
+  selector:
+    matchLabels:
+      app: cloud-stock-deployment # 对应1
+  template:
+    metadata:
+      labels:
+        app: cloud-stock-deployment # 对应1
+    spec:
+      hostAliases:
+      - ip: "192.168.120.161"
+        hostnames:
+          - "kjg-pc"
+      containers:
+        - name: cloud-stock-deployment-pod
+          image: harbor.genn.com/cloud_01/cloud-stock
+          env:
+            - name: STOCK_META
+              value: "1011"
+###########################以上是cloud-stock的deployment配置###########################
+
+
+root@kjg-PC:~/cloud# kubectl apply -f cloud-stock-deployment.yaml 
+deployment.apps/cloud-stock-deployment created
+root@kjg-PC:~/cloud# kubectl get pods -n cloud -owide
+NAME                                      READY   STATUS    RESTARTS   AGE    IP             NODE       NOMINATED NODE   READINESS GATES
+cloud-stock-deployment-6f7d74c849-dtz4x   1/1     Running   0          2m4s   172.31.3.226   ubuntu01   <none>           <none>
+cloud-stock-deployment-6f7d74c849-xcrr7   1/1     Running   0          2m4s   172.31.3.225   ubuntu01   <none>           <none>
+```
+
+可以看到，和Nacos里面注册的实例能一一对应：
+
+![10](06-Kubernetes搭建SpringCloud服务.assets/10.png)
+
+同样的操作，执行于cloud-order：
+
+```bash
+root@kjg-PC:~/cloud# vim cloud-order-deployment.yaml
+###########################以下是cloud-order的deployment配置###########################
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  namespace: cloud
+  name: cloud-stock-deployment
+spec:
+  replicas: 2 # 副本数量
+  selector:
+    matchLabels:
+      app: cloud-stock-deployment # 对应1
+  template:
+    metadata:
+      labels:
+        app: cloud-stock-deployment # 对应1
+    spec:
+      hostAliases:
+      - ip: "192.168.120.161"
+        hostnames:
+          - "kjg-pc"
+      containers:
+        - name: cloud-stock-deployment-pod
+          image: harbor.genn.com/cloud_01/cloud-stock
+          env:
+            - name: STOCK_META
+              value: "1011"
+###########################以上是cloud-order的deployment配置###########################
+root@kjg-PC:~/cloud# kubectl apply -f cloud-order-deployment.yaml 
+deployment.apps/cloud-order-deployment created
+root@kjg-PC:~/cloud# kubectl get deploy -n cloud
+NAME                     READY   UP-TO-DATE   AVAILABLE   AGE
+cloud-order-deployment   2/2     2            2           15s
+cloud-stock-deployment   2/2     2            2           40m
+root@kjg-PC:~/cloud# kubectl get pods -n cloud
+NAME                                      READY   STATUS    RESTARTS   AGE
+cloud-order-deployment-7955756d56-67m5f   1/1     Running   0          27s
+cloud-order-deployment-7955756d56-nz7jz   1/1     Running   0          27s
+cloud-stock-deployment-6f7d74c849-dtz4x   1/1     Running   0          40m
+cloud-stock-deployment-6f7d74c849-xcrr7   1/1     Running   0          40m
+```
+
+### 发生了故障转移
+
+中途因为物理机内存不够用了，ubuntu01被迫死机，顺便触发了一次2个Deployment的故障转移：
+
+```bash
+root@kjg-PC:~/cloud# kubectl get pods -n cloud -owide
+NAME                                      READY   STATUS              RESTARTS   AGE     IP             NODE       NOMINATED NODE   READINESS GATES
+cloud-order-deployment-7955756d56-2pc9s   0/1     ContainerCreating   0          19s     <none>         ubuntu02   <none>           <none>
+cloud-order-deployment-7955756d56-67m5f   1/1     Terminating         0          6m15s   172.31.3.222   ubuntu01   <none>           <none>
+cloud-order-deployment-7955756d56-ntm7f   0/1     ContainerCreating   0          19s     <none>         ubuntu02   <none>           <none>
+cloud-order-deployment-7955756d56-nz7jz   1/1     Terminating         0          6m15s   172.31.3.223   ubuntu01   <none>           <none>
+cloud-stock-deployment-6f7d74c849-dtz4x   1/1     Terminating         0          46m     172.31.3.226   ubuntu01   <none>           <none>
+cloud-stock-deployment-6f7d74c849-pgpbh   0/1     ContainerCreating   0          19s     <none>         ubuntu02   <none>           <none>
+cloud-stock-deployment-6f7d74c849-tdbhp   0/1     ContainerCreating   0          19s     <none>         ubuntu02   <none>           <none>
+cloud-stock-deployment-6f7d74c849-xcrr7   1/1     Terminating         0          46m     172.31.3.225   ubuntu01   <none>           <none>
+```
+
+### deployment均匀分配Pod
+
+由于order和stock一直分配在ubuntu01内，硬件资源不足，最后我删除了cloud-order-deployment和cloud-stock-deployment的部署，重启ubuntu01和ubuntu02：
+
+```bash
+root@kjg-PC:~# kubectl get deploy -n cloud
+No resources found in cloud namespace.
+root@kjg-PC:~# kubectl get pods -n cloud
+No resources found in cloud namespace.
+```
+
+修改cloud-order-deployment和cloud-stock-deployment的配置信息，指定分配策略，达到均匀分配的效果：
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: 
+  namespace: cloud
+  name: cloud-stock-deployment
+spec:
+  replicas: 2 # 副本数量
+  selector: 
+    matchLabels:  
+      app: cloud-stock-deployment
+      ctlr: balance # 用来命中均匀分配的selector
+  template:
+    metadata:
+      labels:
+        app: cloud-stock-deployment
+        ctlr: balance # 用来命中均匀分配的selector
+    spec: 
+      hostAliases:
+      - ip: "192.168.120.161"
+        hostnames:
+          - "kjg-pc"
+      containers: 
+        - name: cloud-stock-deployment-pod
+          image: harbor.genn.com/cloud_01/cloud-stock
+          env: 
+            - name: STOCK_META
+              value: "1011"
+      affinity:
+        podAntiAffinity:                   # Pod工作负载反亲和，类似的还有Node工作负载反亲和(nodeAffintity)
+          requiredDuringSchedulingIgnoredDuringExecution:    # 必须满足如下条件
+          - labelSelector:                       # 选择Pod的标签，与工作负载本身反亲和
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - cloud-stock-deployment
+              - key: ctlr
+                operator: In
+                values: 
+                - balance
+            namespaces:
+              - cloud
+            topologyKey: kubernetes.io/hostname # 必须指明
+```
+
+```bash
+root@kjg-PC:~/cloud# kubectl apply -f cloud-stock-deployment.yaml
+deployment.apps/cloud-stock-deployment created
+root@kjg-PC:~/cloud# kubectl get pods -n cloud -owide
+NAME                                      READY   STATUS    RESTARTS   AGE   IP             NODE       NOMINATED NODE   READINESS GATES
+cloud-stock-deployment-58896c9db8-7lksp   1/1     Running   0          9s    172.31.3.235   ubuntu01   <none>           <none>
+cloud-stock-deployment-58896c9db8-dzn5g   1/1     Running   0          9s    172.31.79.10   ubuntu02   <none>           <none>
+```
+
+可以发现stock开始均匀分配了，同样的操作作用与cloud-stock：
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: 
+  namespace: cloud
+  name: cloud-order-deployment
+spec:
+  replicas: 2 # 副本数量
+  selector: 
+    matchLabels:  
+      app: cloud-order-deployment
+      ctlr: balance # 用来命中均匀分配的selector
+  template:
+    metadata:
+      labels:
+        app: cloud-order-deployment
+        ctlr: balance # 用来命中均匀分配的selector
+    spec: 
+      hostAliases:
+      - ip: "192.168.120.161"
+        hostnames:
+          - "kjg-pc"
+      containers: 
+        - name: cloud-order-deployment-pod
+          image: harbor.genn.com/cloud_01/cloud-order
+          env: 
+            - name: ORDER_META
+              value: "this is k8s order(balance)"
+      affinity:
+        podAntiAffinity:                   # Pod工作负载反亲和，类似的还有Node工作负载反亲和(nodeAffintity)
+          requiredDuringSchedulingIgnoredDuringExecution:    # 必须满足如下条件
+          - labelSelector:                       # 选择Pod的标签，与工作负载本身反亲和
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - cloud-order-deployment
+              - key: ctlr
+                operator: In
+                values: 
+                - balance
+            namespaces:
+              - cloud
+            topologyKey: kubernetes.io/hostname # 必须指明
+```
+
+```bash
+root@kjg-PC:~/cloud# kubectl apply -f cloud-order-deployment.yaml 
+deployment.apps/cloud-order-deployment created
+root@kjg-PC:~/cloud# kubectl get pods -n cloud -owide
+NAME                                      READY   STATUS    RESTARTS   AGE     IP             NODE       NOMINATED NODE   READINESS GATES
+cloud-order-deployment-5cfff576db-ld5vr   1/1     Running  混合 0          6s      172.31.79.13   ubuntu02   <none>           <none>
+cloud-order-deployment-5cfff576db-wsfcd   1/1     Running   0          6s      172.31.3.232   ubuntu01   <none>           <none>
+cloud-stock-deployment-58896c9db8-7lksp   1/1     Running   0          6m50s   172.31.3.235   ubuntu01   <none>           <none>
+cloud-stock-deployment-58896c9db8-dzn5g   1/1     Running   0          6m50s   172.31.79.10   ubuntu02   <none>
+
+
+# 测试可用性
+root@kjg-PC:~/cloud# curl http://172.31.3.235:9001/stock/stock/env
+1011
+root@kjg-PC:~/cloud# curl http://172.31.79.13:8001/order/order/env
+this is k8s order(balance)
+```
+
+### 测试连通性
+
+观察Nacos的服务实例信息，发现和4个Pod一致：
+
+![11](06-Kubernetes搭建SpringCloud服务.assets/11.png)
+
+![12](06-Kubernetes搭建SpringCloud服务.assets/12.png)
+
+请求一下cloud-order，测试连通性：
+
+```bash
+jg-PC:~/cloud# curl http://172.31.79.13:8001/order/order/preOrder/827
+{"metaId":"this is k8s order(balance)","orderId":827,"stock":1011}
+root@kjg-PC:~/cloud# curl http://172.31.79.13:8001/order/order/preOrder/827
+{"metaId":"this is k8s order(balance)","orderId":827,"stock":1011}
+root@kjg-PC:~/cloud# curl http://172.31.79.13:8001/order/order/preOrder/827
+{"metaId":"this is k8s order(balance)","orderId":827,"stock":1011}
+root@kjg-PC:~/cloud# curl http://172.31.79.13:8001/order/order/preOrder/827
+{"metaId":"this is k8s order(balance)","orderId":827,"stock":1011}
+root@kjg-PC:~/cloud# curl http://172.31.79.13:8001/order/order/preOrder/827
+{"metaId":"this is k8s order(balance)","orderId":827,"stock":1011}
+root@kjg-PC:~/cloud# curl http://172.31.79.13:8001/order/order/preOrder/827
+{"metaId":"this is k8s order(balance)","orderId":827,"stock":1011}
+root@kjg-PC:~/cloud# curl http://172.31.79.13:8001/order/order/preOrder/827
+{"metaId":"this is k8s order(balance)","orderId":827,"stock":1011}
+```
+
+## Service
+
+我认为目前不需要Servce来部署服务实例，它更适合用来部署gateway，为什么？我画一张基于上面Deployment部署的图：
+
 TODO
