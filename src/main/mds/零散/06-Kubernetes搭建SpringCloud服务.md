@@ -497,3 +497,122 @@ latest: digest: sha256:131a1ba5334144845f941176edf118a915e8508aa09bf67927919b80e
 查看harbor，镜像成功上传：
 
 ![09](06-Kubernetes搭建SpringCloud服务.assets/09.png)
+
+# 由浅入深通过Kubernetes搭建SpringCloud
+
+## Pod
+
+创建一个专属的namespace:
+
+```bash
+root@kjg-PC:~# kubectl create namespace cloud
+namespace/cloud created
+root@kjg-PC:~# kubectl get namespace
+NAME                   STATUS   AGE
+cloud                  Active   10s
+default                Active   34d
+ingress-nginx          Active   23d
+kube-node-lease        Active   34d
+kube-public            Active   34d
+kube-system            Active   34d
+kubernetes-dashboard   Active   31d
+```
+
+创建一个cloud文件夹，编写cloud-stock的pod资源：
+
+```bash
+root@kjg-PC:~# mkdir cloud
+root@kjg-PC:~# cd cloud
+root@kjg-PC:~/cloud# vim cloud-stock-pod.yaml
+
+######################以下是vim cloud-stock-pod.yaml的内容######################
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: cloud # Pod的namespace
+  name: cloud-stock-pod # Pod的名称
+  labels:
+    run: cloud-stock # 启动哪个容器
+spec:
+  hostAliases:
+    - ip: "192.168.120.161"
+      hostnames:
+        - "kjg-pc"
+  containers:
+    - name: cloud-stock # 容器名称
+      image: harbor.genn.com/cloud_01/cloud-stock # 容器镜像
+      env:
+        - name: STOCK_META # 配置容器内的环境变量
+          value: "6009"
+######################以上是vim cloud-stock-pod.yaml的内容######################
+
+root@kjg-PC:~/cloud# kubectl apply -f cloud-stock-pod.yaml
+pod/cloud-stock-pod created
+root@kjg-PC:~/cloud# kubectl get pods -n cloud
+NAME              READY   STATUS              RESTARTS   AGE
+cloud-stock-pod   0/1     ContainerCreating   0          17s
+# 查看cloud-stock的日志
+root@kjg-PC:~/cloud# kubectl logs cloud-stock-pod -n cloud
+# 有点长，截取关键部分：
+2023-03-04 03:43:33.301  INFO 1 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port(s): 9001 (http) with context path '/stock'
+2023-03-04 03:43:33.313  INFO 1 --- [           main] com.alibaba.nacos.client.naming          : [REGISTER-SERVICE] 960dc00f-5243-494d-ad9d-1be9ddd0ed95 registering service DEFAULT_GROUP@@cloudstock with instance: Instance{instanceId='null', ip='172.31.3.218', port=9001, weight=1.0, healthy=true, enabled=true, ephemeral=true, clusterName='DEFAULT', serviceName='null', metadata={preserved.register.source=SPRING_CLOUD}}
+
+
+root@kjg-PC:~/cloud# kubectl get pods -n cloud -owide
+NAME              READY   STATUS    RESTARTS   AGE   IP             NODE       NOMINATED NODE   READINESS GATES
+cloud-stock-pod   1/1     Running   0          12m   172.31.3.218   ubuntu01   <none>           <none>
+root@kjg-PC:~/cloud# curl http://172.31.3.218:9001/stock/stock/env
+6009
+```
+
+可以看到，cloud-stock以172.31.3.218的ip注册进Nacos，并且和Pod的IP保持一致，这是我希望看到的。
+
+同样的操作，执行于cloud-order，最终效果：
+
+```bash
+root@kjg-PC:~/cloud# cp cloud-stock-pod.yaml cloud-order-pod.yaml
+root@kjg-PC:~/cloud# vim cloud-order-pod.yaml
+######################以下是vim cloud-order-pod.yaml的内容######################
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: cloud # Pod的namespace
+  name: cloud-order-pod # Pod的名称
+  labels:
+    run: cloud-order # 启动哪个容器
+spec:
+  hostAliases:
+    - ip: "192.168.120.161"
+      hostnames:
+        - "kjg-pc"
+  containers:
+    - name: cloud-order # 容器名称
+      image: harbor.genn.com/cloud_01/cloud-order # 容器镜像
+      env:
+        - name: ORDER_META # 配置容器内的环境变量
+          value: "this is order meta(k8s)"
+######################以上是vim cloud-order-pod.yaml的内容######################
+root@kjg-PC:~/cloud# kubectl apply -f cloud-order-pod.yaml 
+pod/cloud-order-pod created
+root@kjg-PC:~/cloud# kubectl get pods -n cloud
+NAME              READY   STATUS    RESTARTS   AGE
+cloud-order-pod   1/1     Running   0          19s
+cloud-stock-pod   1/1     Running   0          165m
+root@kjg-PC:~/cloud# kubectl logs cloud-order-pod -n cloud
+2023-03-04 06:28:24.143  INFO 1 --- [           main] o.s.b.w.embedded.tomcat.TomcatWebServer  : Tomcat started on port(s): 8001 (http) with context path '/order'
+2023-03-04 06:28:24.163  INFO 1 --- [           main] com.alibaba.nacos.client.naming          : [REGISTER-SERVICE] 960dc00f-5243-494d-ad9d-1be9ddd0ed95 registering service DEFAULT_GROUP@@cloudorder with instance: Instance{instanceId='null', ip='172.31.3.221', port=8001, weight=1.0, healthy=true, enabled=true, ephemeral=true, clusterName='DEFAULT', serviceName='null', metadata={preserved.register.source=SPRING_CLOUD}}
+root@kjg-PC:~/cloud# kubectl get pods -n cloud -owide
+NAME              READY   STATUS    RESTARTS   AGE     IP             NODE       NOMINATED NODE   READINESS GATES
+cloud-order-pod   1/1     Running   0          2m16s   172.31.3.221   ubuntu01   <none>           <none>
+cloud-stock-pod   1/1     Running   0          167m    172.31.3.218   ubuntu01   <none>           <none>
+
+
+root@kjg-PC:~/cloud# curl http://172.31.3.221:8001/order/order/env
+this is order meta(k8s)
+root@kjg-PC:~/cloud# curl http://172.31.3.221:8001/order/order/preOrder/2
+{"metaId":"this is order meta(k8s)","orderId":2,"stock":6009}
+```
+
+## Deployment
+
+TODO
