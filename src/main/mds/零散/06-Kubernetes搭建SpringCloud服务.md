@@ -893,6 +893,76 @@ root@kjg-PC:~/cloud# curl http://172.31.79.13:8001/order/order/preOrder/827
 
 ## Service
 
-我认为目前不需要Servce来部署服务实例，它更适合用来部署gateway，为什么？我画一张基于上面Deployment部署的图：
+我认为目前不需要Servce来部署服务实例，它更适合用来部署gateway。
 
-TODO
+对于Nacos来说，没有K8S的Service概念，当服务实例作为Pod被启动后，会自动将Pod IP注册进Nacos里面，为了方便演示，我新建一个cloud-stock-service，首先保证cloud-stock-deployment.yaml已经定义好app的值，方便Service定位：
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: 
+  namespace: cloud
+  name: cloud-stock-deployment
+spec:
+  replicas: 2
+  selector: 
+    matchLabels:  
+      app: cloud-stock-deployment
+      ctlr: balance
+  template:
+    metadata:
+      labels:
+        app: cloud-stock-deployment  # 这里必须定义好值，让Service命中
+        ctlr: balance
+```
+
+新建cloud-stock-service并启动：
+
+```bash
+# 启动cloud-stock-deployment，保证K8S集群中已存在这个deployment：
+root@kjg-PC:~/cloud# kubectl apply -f cloud-order-deployment.yaml 
+deployment.apps/cloud-order-deployment created
+
+root@kjg-PC:~/cloud# vim cloud-stock-service.yaml
+#############################以下是cloud-stock-service.yaml的内容#############################
+apiVersion: v1
+kind: Service
+metadata:
+  namespace: cloud
+  name: cloud-stock-service
+spec:
+  selector:
+    app: cloud-stock-deployment
+  ports:
+    - name: http
+      port: 9001
+      targetPort: 9001
+#############################以上是cloud-stock-service.yaml的内容#############################
+
+# 启动cloud-stock-service，访问测试成功
+root@kjg-PC:~/cloud# kubectl apply -f cloud-stock-service.yaml 
+service/cloud-stock-service created
+root@kjg-PC:~/cloud# kubectl get pods -n cloud -owide
+NAME                                      READY   STATUS    RESTARTS   AGE   IP             NODE       NOMINATED NODE   READINESS GATES
+cloud-stock-deployment-58896c9db8-dxclm   1/1     Running   2          19m   172.31.79.18   ubuntu02   <none>           <none>
+cloud-stock-deployment-58896c9db8-g5t4d   1/1     Running   0          19m   172.31.3.237   ubuntu01   <none>           <none>
+root@kjg-PC:~/cloud# curl http://10.96.97.81:9001/stock/stock/env
+1011
+
+```
+
+可以看到，Service没问题，接着去看看Nacos的stock服务实例IP：
+
+![image-20230311121519293](06-Kubernetes搭建SpringCloud服务.assets/13.png)
+
+因为Nacos眼里没有Service，他只会将Pod IP注册进服务列表。其实Service的作用和Nacos的作用有点重复了，虽然Kubernetes提供了Service完成服务发现、负载均衡、故障转移，但它是作为基础设施的层面进行。对于Spring Cloud微服务实例来说，Nacos同样能完成这些功能。
+
+相反，向gateway这种服务可以使用Service来部署，因为它是微服务的网关，直接承载着外部请求。一般来说，项目会使用：
+
+![14](06-Kubernetes搭建SpringCloud服务.assets/14.png)
+
+如果用Service来部署gateway，可以实现：
+
+![15](06-Kubernetes搭建SpringCloud服务.assets/15.png)
+
+总的来说，负载均衡是肯定要做的，问题是 交给Nginx来做 还是 交给Service来做 而已，交给Service来做还能实现K8S的健康负载均衡，可能会好一点。但不管怎样，服务Pod的负载均衡交给Service来做，多少有点浪费Naocs了。
