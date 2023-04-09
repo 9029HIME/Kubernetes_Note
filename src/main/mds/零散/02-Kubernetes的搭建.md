@@ -300,7 +300,7 @@ kjg-pc   NotReady   control-plane,master   2m6s   v1.20.9
 curl https://docs.projectcalico.org/v3.21/manifests/calico.yaml -O
 ```
 
-修改配置文件内容，将value: "192.168.0.0/16"改成pod-network-cidr的值：
+修改配置文件内容，将CALICO_IPV4POOL_CIDR的value: "192.168.0.0/16"改成pod-network-cidr的值：
 
 ```
 
