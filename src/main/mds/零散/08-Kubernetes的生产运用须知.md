@@ -96,7 +96,7 @@ FROM ubuntu:20.04
 
 WORKDIR /
 
-# 将golang:1.20镜像内的/build/main拷贝到gcr.io/distroless/base-debian10镜像的根目录下
+# 将golang:1.20镜像内的/build/main拷贝到ubuntu:20.04镜像的根目录下
 COPY --from=builder /build/main /main
 
 EXPOSE 10000
@@ -207,9 +207,236 @@ v2: digest: sha256:af02a504a5968315187d2d149ca42d412baecf7fa727b7834aaf91c501744
 
 ### Kubernetes准备
 
+编写Service：
+
+```yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: golang-test-01-service
+  namespace: golang-test-01
+  labels:
+    app: golang-test-01-app
+spec: 
+  ports:    
+    - port: 10000 
+      targetPort: 10000
+      protocol: TCP 
+      name: http
+  # 注意这里我们匹配 app 和 version 标签，当要切换流量的时候，我们更新 version 标签的值，比如：v2
+  selector:   
+    app: golang-test-01-app
+    version: v1
+```
+
+编写Deployment v1：
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: golang-test-01-deployment-v1
+  namespace: golang-test-01
+  labels:
+    app: golang-test-01-app
+    version: v1
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: golang-test-01-app
+      version: v1
+  template:
+    metadata:
+      labels:
+        app: golang-test-01-app
+        version: v1
+    spec:
+      containers:
+      - name: golang-test-01-v1-pod
+        image: harbor.genn.com/golang_01/golang_test_image:v1
+        ports:
+          - name: http
+            containerPort: 10000
+            protocol: TCP
+      affinity:
+        podAntiAffinity:                   # Pod工作负载反亲和，类似的还有Node工作负载反亲和(nodeAffintity)
+          requiredDuringSchedulingIgnoredDuringExecution:    # 必须满足如下条件
+          - labelSelector:                       # 选择Pod的标签，与工作负载本身反亲和
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - golang-test-01-app
+              - key: version
+                operator: In
+                values: 
+                - v1
+            namespaces:
+              - golang-test-01
+            topologyKey: kubernetes.io/hostname # 必须指明
+```
+
+编写Deployment v2：
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: golang-test-01-deployment-v2
+  namespace: golang-test-01
+  labels:
+    app: golang-test-01-app
+    version: v2
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: golang-test-01-app
+      version: v2
+  template:
+    metadata:
+      labels:
+        app: golang-test-01-app
+        version: v2
+    spec:
+      containers:
+      - name: golang-test-01-v2-pod
+        image: harbor.genn.com/golang_01/golang_test_image:v2
+        ports:
+          - name: http
+            containerPort: 10000
+            protocol: TCP
+      affinity:
+        podAntiAffinity:                   # Pod工作负载反亲和，类似的还有Node工作负载反亲和(nodeAffintity)
+          requiredDuringSchedulingIgnoredDuringExecution:    # 必须满足如下条件
+          - labelSelector:                       # 选择Pod的标签，与工作负载本身反亲和
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - golang-test-01-app
+              - key: version
+                operator: In
+                values: 
+                - v2
+            namespaces:
+              - golang-test-01
+            topologyKey: kubernetes.io/hostname # 必须指明
+```
+
+正常部署Deployment v1和Service，测试连通性：
+
+```bash
+root@kjg-PC:~/golang_test_01# kubectl apply -f golang-test-01-deployment-v1.yaml -f golang-test-01-service.yaml 
+deployment.apps/golang-test-01-deployment created
+service/golang-test-01-service created
+root@kjg-PC:~/golang_test_01# kubectl get pods -n golang-test-01 -owide
+NAME                                         READY   STATUS    RESTARTS   AGE   IP             NODE       NOMINATED NODE   READINESS GATES
+golang-test-01-deployment-74fcbf6bfc-4778c   1/1     Running   0          19s   172.31.79.8    ubuntu02   <none>           <none>
+golang-test-01-deployment-74fcbf6bfc-qktkb   1/1     Running   0          19s   172.31.3.201   ubuntu01   <none>           <none>
+root@kjg-PC:~/golang_test_01# curl http://172.31.79.8:10000
+HERE IS VERSION 1
+root@kjg-PC:~/golang_test_01# curl http://172.31.3.201:10000
+HERE IS VERSION 1
+root@kjg-PC:~/golang_test_01# kubectl get svc -n golang-test-01
+NAME                     TYPE        CLUSTER-IP     EXTERNAL-IP   PORT(S)     AGE
+golang-test-01-service   ClusterIP   10.96.157.11   <none>        10000/TCP   84s
+root@kjg-PC:~/golang_test_01# curl http://10.96.157.11:10000
+HERE IS VERSION 1 
+```
+
+部署Deployment v2，测试连通性：
+
+```bash
+root@kjg-PC:~/golang_test_01# kubectl apply -f golang-test-01-deployment-v2.yaml 
+deployment.apps/golang-test-01-deployment-v2 created
+root@kjg-PC:~/golang_test_01# kubectl get pods -n golang-test-01 -owide | grep v2
+golang-test-01-deployment-v2-5748c7458f-l7c78   1/1     Running   0          27s     172.31.3.202   ubuntu01   <none>           <none>
+golang-test-01-deployment-v2-5748c7458f-xdg5p   1/1     Running   0          27s     172.31.79.9    ubuntu02   <none>           <none>
+root@kjg-PC:~/golang_test_01# curl http://172.31.3.202:10000
+HERE IS VERSION 2
+root@kjg-PC:~/golang_test_01# curl http://172.31.79.9:10000
+HERE IS VERSION 2 
+```
+
+这时候就能验收v2版本了，等没问题后，通过kubectl patch service，改变service的流量路由:
+
+```bash
+root@kjg-PC:~/golang_test_01# curl http://10.96.157.11:10000
+HERE IS VERSION 1
+root@kjg-PC:~/golang_test_01# curl http://10.96.157.11:10000
+HERE IS VERSION 1
+root@kjg-PC:~/golang_test_01# curl http://10.96.157.11:10000
+HERE IS VERSION 1
+root@kjg-PC:~/golang_test_01# curl http://10.96.157.11:10000
+HERE IS VERSION 1
+root@kjg-PC:~/golang_test_01# curl http://10.96.157.11:10000
+HERE IS VERSION 1
+
+root@kjg-PC:~/golang_test_01# kubectl patch service golang-test-01-service -p '{"spec":{"selector":{"version":"v2"}}}' -n golang-test-01
+service/golang-test-01-service patched
+
+root@kjg-PC:~/golang_test_01# curl http://10.96.157.11:10000
+HERE IS VERSION 2
+root@kjg-PC:~/golang_test_01# curl http://10.96.157.11:10000
+HERE IS VERSION 2
+root@kjg-PC:~/golang_test_01# curl http://10.96.157.11:10000
+HERE IS VERSION 2
+root@kjg-PC:~/golang_test_01# curl http://10.96.157.11:10000
+HERE IS VERSION 2
+root@kjg-PC:~/golang_test_01# curl http://10.96.157.11:10000
+HERE IS VERSION 2
+```
+
 ## 小插曲：Build Golang程序引发的多From知识
 
+多个 FROM 指令并不是为了生成多根的层关系，最后生成的镜像，仍以最后一条 FROM 为准，之前的 FROM 会被抛弃，那么之前的FROM 又有什么意义呢？
 
+每一条 FROM 指令都是一个构建阶段，多条 FROM 就是多阶段构建，虽然最后生成的镜像只能是最后一个阶段的结果，但是，能够将前置阶段中的文件拷贝到后边的阶段中，这就是多阶段构建的最大意义。
+
+最大的使用场景是将编译环境和运行环境分离，比如，之前我们需要构建一个Go语言程序，那么就需要用到go命令等编译环境，我们的Dockerfile可能是这样的：
+
+```dockerfile
+FROM golang:1.20 AS builder
+
+COPY Server.go /build/
+COPY go.mod /build/
+
+WORKDIR /build
+
+RUN GOOS=linux go build -o main
+EXPOSE 10000
+
+ENTRYPOINT ["/build/main"]
+```
+
+基础镜像  是非常庞大的，因为其中包含了所有的Go语言编译工具和库，而运行时候我们仅仅需要编译后的 `server` 程序就行了，不需要编译时的编译工具，最后生成的大体积镜像就是一种浪费。解决办法是将程序编译和镜像构建分开，使用golang:1.20作为编译环境，ubuntu20.04作为运行环境，也是镜像的实际运行环境：
+
+```dockerfile
+FROM golang:1.20 AS builder
+
+# copy ./Server.go 到 golang:1.20镜像内的/build目录下
+COPY Server.go /build/
+COPY go.mod /build/
+
+# 将golang:1.20镜像内的/build目录作为工作目录，接下来的操作都是基于/build进行
+WORKDIR /build
+
+# 编译build目录下的main文件，输出名为main的可执行文件
+RUN GOOS=linux go build -o main
+
+FROM ubuntu:20.04
+
+WORKDIR /
+
+# 将golang:1.20镜像内的/build/main拷贝到ubuntu20.04镜像的根目录下
+COPY --from=builder /build/main /main
+
+EXPOSE 10000
+
+ENTRYPOINT ["/main"]
+```
 
 # Pod的存活与就绪
 
