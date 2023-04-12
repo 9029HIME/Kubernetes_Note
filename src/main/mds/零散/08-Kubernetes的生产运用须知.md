@@ -389,6 +389,8 @@ root@kjg-PC:~/golang_test_01# curl http://10.96.157.11:10000
 HERE IS VERSION 2
 ```
 
+### 补充：用kubectl edit也是一样的
+
 ## 小插曲：Build Golang程序引发的多From知识
 
 多个 FROM 指令并不是为了生成多根的层关系，最后生成的镜像，仍以最后一条 FROM 为准，之前的 FROM 会被抛弃，那么之前的FROM 又有什么意义呢？
