@@ -444,9 +444,341 @@ ENTRYPOINT ["/main"]
 
 ## 存活指针
 
+Kubernetes的存活指针决定什么时候重启失活的Pod，但是实际生产环境中，不能仅依赖存活指针决定重启，否则有可能引起Pod的异常重启，**在这里仅作为了解用**。
 
+在上面的v1程序基础上，新增一个/heartbeat接口，逻辑很简单：程序启动10秒正常返回，10秒后返回500：
+
+```go
+package main
+
+import (
+	"fmt"
+	"io"
+	"net/http"
+	"strconv"
+	"time"
+)
+
+var start time.Time = time.Now()
+
+func main() {
+	http.HandleFunc("/", Handler)
+	http.HandleFunc("/heartbeat", Heartbeat)
+	http.ListenAndServe(":10000", nil)
+}
+
+func Handler(rw http.ResponseWriter, request *http.Request) {
+	io.WriteString(rw, "HERE IS VERSION 1")
+}
+
+func Heartbeat(rw http.ResponseWriter, request *http.Request) {
+	now := time.Now()
+	duration := now.Sub(start).Seconds()
+	msg := fmt.Sprintf("start=%s.....now=%s.....duration=%s",
+		start.Format("2006-01-02 15:04:05"),
+		now.Format("2006-01-02 15:04:05"),
+		strconv.Itoa(int(duration)))
+	if duration > 10 {
+		rw.WriteHeader(500)
+	}
+	io.WriteString(rw, msg)
+}
+
+```
+
+用同样的dockerfile打包、上传镜像，就是镜像名称注意tag为heartbeat：
+
+```bash
+root@kjg-PC:/home/kjg/GolandProjects/Kubernetes_Note_Golang_Code/08_02_01# docker build -t golang_test_01_image:heartbeat .
+Sending build context to Docker daemon   5.12kB
+Step 1/10 : FROM golang:1.20 AS builder
+ ---> e1567729a36d
+Step 2/10 : COPY Server.go /build/
+ ---> d94690cc3a02
+Step 3/10 : COPY go.mod /build/
+ ---> 8e33c4b1ed0b
+Step 4/10 : WORKDIR /build
+ ---> Running in afda515d6165
+Removing intermediate container afda515d6165
+ ---> 20829a44162e
+Step 5/10 : RUN GOOS=linux go build -o main
+ ---> Running in 2b42c285fd60
+Removing intermediate container 2b42c285fd60
+ ---> 841ccaf955c8
+Step 6/10 : FROM ubuntu:20.04
+ ---> ba6acccedd29
+Step 7/10 : WORKDIR /
+ ---> Using cache
+ ---> 2ec8cdc1ef19
+Step 8/10 : COPY --from=builder /build/main /main
+ ---> a631471c1996
+Step 9/10 : EXPOSE 10000
+ ---> Running in e57f4580c496
+Removing intermediate container e57f4580c496
+ ---> 5eb01e9b7927
+Step 10/10 : ENTRYPOINT ["/main"]
+ ---> Running in bf03cee48f01
+Removing intermediate container bf03cee48f01
+ ---> 76c4bbdff83d
+Successfully built 76c4bbdff83d
+Successfully tagged golang_test_01_image:heartbeat
+
+root@kjg-PC:~# docker images | grep "heartbeat"
+golang_test_01_image                                                       heartbeat           76c4bbdff83d        47 seconds ago      79.4MB
+root@kjg-PC:~# docker tag golang_test_01_image:heartbeat harbor.genn.com/golang_01/golang_test_01_image:heartbeat
+root@kjg-PC:~# docker push harbor.genn.com/golang_01/golang_test_01_image:heartbeat
+The push refers to repository [harbor.genn.com/golang_01/golang_test_01_image]
+d5263d9eb736: Pushed 
+9f54eef41275: Mounted from golang_01/golang_test_image 
+heartbeat: digest: sha256:922e480a0941d710daaff1131dbaa650bbf15f211196642119f5630835c0280e size: 740
+```
+
+![03](08-Kubernetes的生产运用须知.assets/03.png)
+
+编写Deployment配置：
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: golang-test-01-heartbeat-deployment
+  namespace: golang-test-01
+  labels:
+    app: golang-test-01-heartbeat-app
+    version: heartbeat
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: golang-test-01-heartbeat-app
+      version: heartbeat
+  template:
+    metadata:
+      labels:
+        app: golang-test-01-heartbeat-app
+        version: heartbeat
+    spec:
+      containers:
+      - name: golang-test-01-heartbeat-pod
+        image: harbor.genn.com/golang_01/golang_test_01_image:heartbeat
+        ports:
+          - name: http
+            containerPort: 10000
+            protocol: TCP
+        livenessProbe: # 开启存活指针
+          httpGet: # 存活指针以HTTP GET方式进行
+            path: /heartbeat # 请求http://podIP:podPort/heartbeat
+            port: 10000
+          initialDelaySeconds: 2  # 容器启动后，应延迟2秒再开启存活判断
+          periodSeconds: 2 # 存活指针每2秒进行一次判断
+```
+
+启动这个Deployment，可以发现Pod不断地重启，直到超出次数陷入CrashLoopBackOff：
+
+```bash
+root@kjg-PC:~/golang_test_01# kubectl apply -f golang-test-01-deployment-heartbeat.yaml 
+deployment.apps/golang-test-01-heartbeat-deployment created
+
+
+root@kjg-PC:~/golang_test_01# kubectl get pods -n golang-test-01 -owide
+NAME                                                   READY   STATUS    RESTARTS   AGE   IP             NODE       NOMINATED NODE   READINESS GATES
+golang-test-01-heartbeat-deployment-759d7bd846-grfq8   1/1     Running   0          25s   172.31.3.209   ubuntu01   <none>           <none>
+
+
+root@kjg-PC:~/golang_test_01# kubectl get pods -n golang-test-01 -owide
+NAME                                                   READY   STATUS    RESTARTS   AGE    IP             NODE       NOMINATED NODE   READINESS GATES
+golang-test-01-heartbeat-deployment-759d7bd846-grfq8   1/1     Running   4          110s   172.31.3.209   ubuntu01   <none>           <none>
+
+
+root@kjg-PC:~/golang_test_01# kubectl get pods -n golang-test-01 -owide
+NAME                                                   READY   STATUS             RESTARTS   AGE     IP             NODE       NOMINATED NODE   READINESS GATES
+golang-test-01-heartbeat-deployment-759d7bd846-grfq8   0/1     CrashLoopBackOff   5          2m43s   172.31.3.209   ubuntu01   <none>           <none>
+
+
+root@kjg-PC:~/golang_test_01# kubectl describe pod golang-test-01-heartbeat-deployment-759d7bd846-grfq8 -n golang-test-01
+Events:
+  Type     Reason     Age                    From               Message
+  ----     ------     ----                   ----               -------
+  Normal   Scheduled  3m20s                  default-scheduler  Successfully assigned golang-test-01/golang-test-01-heartbeat-deployment-759d7bd846-grfq8 to ubuntu01
+  Normal   Pulled     2m18s (x4 over 3m4s)   kubelet            Container image "harbor.genn.com/golang_01/golang_test_01_image:heartbeat" already present on machine
+  Normal   Created    2m18s (x4 over 3m4s)   kubelet            Created container golang-test-01-heartbeat-pod
+  Normal   Killing    2m18s (x3 over 2m50s)  kubelet            Container golang-test-01-heartbeat-pod failed liveness probe, will be restarted
+  Normal   Started    2m17s (x4 over 3m4s)   kubelet            Started container golang-test-01-heartbeat-pod
+  Warning  Unhealthy  2m6s (x10 over 2m54s)  kubelet            Liveness probe failed: HTTP probe failed with statuscode: 500
+```
 
 ## 就绪指针
+
+对于Kubernetes，可以通过就绪指针判断这个Pod是否已处于“Ready”状态，当一个Pod升级后不能就绪，即不应该让流量进入该Pod，在配合 Rolling Update的功能下，也不能允许升级版本继续下去，否则服务会出现全部升级完成，导致所有服务均不可用的情况。
+
+修改一下上面的heartbeat代码，不再等10秒了，启动后直接响应500：
+
+```
+package main
+
+import (
+   "io"
+   "net/http"
+)
+
+func main() {
+   http.HandleFunc("/", Handler)
+   http.HandleFunc("/heartbeat", Heartbeat)
+   http.ListenAndServe(":10000", nil)
+}
+
+func Handler(rw http.ResponseWriter, request *http.Request) {
+   io.WriteString(rw, "HERE IS VERSION 1")
+}
+
+func Heartbeat(rw http.ResponseWriter, request *http.Request) {
+   rw.WriteHeader(500)
+}
+```
+
+打包镜像，推送仓库，版本号从heartbeat改为heartbeat-bad：
+
+```bash
+kjg@kjg-PC:~/GolandProjects/Kubernetes_Note_Golang_Code/08_02_01_bad$ docker build -t golang_test_01_image:heartbeat-bad .
+Sending build context to Docker daemon  4.608kB
+Step 1/10 : FROM golang:1.20 AS builder
+ ---> e1567729a36d
+Step 2/10 : COPY Server.go /build/
+ ---> cd2167620db8
+Step 3/10 : COPY go.mod /build/
+ ---> a1085282f525
+Step 4/10 : WORKDIR /build
+ ---> Running in 176b7ca907a5
+Removing intermediate container 176b7ca907a5
+ ---> c221398ad982
+Step 5/10 : RUN GOOS=linux go build -o main
+ ---> Running in 12e8ae315d31
+Removing intermediate container 12e8ae315d31
+ ---> 72d7ba5201e1
+Step 6/10 : FROM ubuntu:20.04
+ ---> ba6acccedd29
+Step 7/10 : WORKDIR /
+ ---> Using cache
+ ---> 2ec8cdc1ef19
+Step 8/10 : COPY --from=builder /build/main /main
+ ---> b02c6b84f3c5
+Step 9/10 : EXPOSE 10000
+ ---> Running in fc5c05444f32
+Removing intermediate container fc5c05444f32
+ ---> a150e9e4ed20
+Step 10/10 : ENTRYPOINT ["/main"]
+ ---> Running in f883d6747ed5
+Removing intermediate container f883d6747ed5
+ ---> c73b89c65551
+Successfully built c73b89c65551
+Successfully tagged golang_test_01_image:heartbeat-bad
+
+root@kjg-PC:~/golang_test_01# docker images | grep bad
+golang_test_01_image                                                       heartbeat-bad       c73b89c65551        37 seconds ago      79.4MB
+root@kjg-PC:~/golang_test_01# docker tag golang_test_01_image:heartbeat-bad harbor.genn.com/golang_01/golang_test_01_image:heartbeat-bad
+root@kjg-PC:~/golang_test_01# docker push harbor.genn.com/golang_01/golang_test_01_image:heartbeat-bad
+The push refers to repository [harbor.genn.com/golang_01/golang_test_01_image]
+10389991f9bd: Pushed 
+9f54eef41275: Layer already exists 
+heartbeat-bad: digest: sha256:f10d529a0c100365b50c7c5864f5b37ee18a5378cebbde4949fe906a4d097a66 size: 740
+```
+
+除了像[之前整理的直接set image来实现滚动更新](https://github.com/9029HIME/Kubernetes_Note/blob/master/src/main/mds/%E9%9B%B6%E6%95%A3/03-Kubernetes%E7%9A%84%E8%BF%9B%E9%98%B6%E6%A6%82%E5%BF%B5.md)，也可以通过修改Deployment文件重新部署，实现滚动更新：
+
+```bash
+root@kjg-PC:~/golang_test_01# cp golang-test-01-deployment-heartbeat.yaml golang-test-01-deployment-heartbeat-bad.yaml
+root@kjg-PC:~/golang_test_01# vim golang-test-01-deployment-heartbeat-bad.yaml
+```
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: golang-test-01-heartbeat-deployment
+  namespace: golang-test-01
+  labels:
+    app: golang-test-01-heartbeat-app
+    version: heartbeat
+spec:
+  strategy:
+    rollingUpdate: # 启用滚动更新
+      maxSurge: 1
+      maxUnavailable: 0 # 因为heartbeat集群本身只有1个副本，所以maxUnavailable设置为0，保证总有1个副本提供服务（虽然heartbeat已经CrashLoopBackOff了）
+  replicas: 1
+  selector:
+    matchLabels:
+      app: golang-test-01-heartbeat-app
+      version: heartbeat
+  template:
+    metadata:
+      labels:
+        app: golang-test-01-heartbeat-app
+        version: heartbeat
+    spec:
+      containers:
+      - name: golang-test-01-heartbeat-pod
+        image: harbor.genn.com/golang_01/golang_test_01_image:heartbeat-bad # 修改镜像为heartbeat-bad
+        ports:
+          - name: http
+            containerPort: 10000
+            protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /heartbeat
+            port: 10000     
+          initialDelaySeconds: 1 # 容器启动多久后进行存活或就绪探测
+          successThreshold: 1 # 连续探测成功到一定次数后，才视为真正成功 
+          failureThreshold: 2 # 连续探测失败到一定次数后，才视为真正失败
+```
+
+```bash
+root@kjg-PC:~/golang_test_01# kubectl get pods -n golang-test-01 -owide
+NAME                                                   READY   STATUS             RESTARTS   AGE   IP             NODE       NOMINATED NODE   READINESS GATES
+golang-test-01-heartbeat-deployment-759d7bd846-w7wrv   0/1     CrashLoopBackOff   3          66s   172.31.3.216   ubuntu01   <none>           <none>
+
+root@kjg-PC:~/golang_test_01# kubectl apply -f golang-test-01-deployment-heartbeat-bad.yaml
+deployment.apps/golang-test-01-heartbeat-deployment configured
+
+root@kjg-PC:~/golang_test_01# kubectl get pods -n golang-test-01 -owide
+NAME                                                   READY   STATUS    RESTARTS   AGE    IP             NODE       NOMINATED NODE   READINESS GATES
+golang-test-01-heartbeat-deployment-6b77bb788f-xsbtc   0/1     Running   0          17s    172.31.3.217   ubuntu01   <none>           <none>
+golang-test-01-heartbeat-deployment-759d7bd846-w7wrv   1/1     Running   4          105s   172.31.3.216   ubuntu01   <none>           <none>
+
+root@kjg-PC:~/golang_test_01# kubectl get pods -n golang-test-01 -owide
+NAME                                                   READY   STATUS             RESTARTS   AGE     IP             NODE       NOMINATED NODE   READINESS GATES
+golang-test-01-heartbeat-deployment-6b77bb788f-xsbtc   0/1     Running            0          70s     172.31.3.217   ubuntu01   <none>           <none>
+golang-test-01-heartbeat-deployment-759d7bd846-w7wrv   0/1     CrashLoopBackOff   5          2m38s   172.31.3.216   ubuntu01   <none>           <none>
+
+root@kjg-PC:~/golang_test_01# kubectl get pods -n golang-test-01 -owide
+NAME                                                   READY   STATUS             RESTARTS   AGE     IP             NODE       NOMINATED NODE   READINESS GATES
+golang-test-01-heartbeat-deployment-6b77bb788f-xsbtc   0/1     Running            0          3m4s    172.31.3.217   ubuntu01   <none>           <none>
+golang-test-01-heartbeat-deployment-759d7bd846-w7wrv   0/1     CrashLoopBackOff   6          4m32s   172.31.3.216   ubuntu01   <none>           <none>
+
+
+
+root@kjg-PC:~/golang_test_01# kubectl describe pod golang-test-01-heartbeat-deployment-6b77bb788f-xsbtc -n golang-test-01
+Events:
+  Type     Reason     Age                  From               Message
+  ----     ------     ----                 ----               -------
+  Normal   Scheduled  3m34s                default-scheduler  Successfully assigned golang-test-01/golang-test-01-heartbeat-deployment-6b77bb788f-xsbtc to ubuntu01
+  Normal   Pulled     3m32s                kubelet            Container image "harbor.genn.com/golang_01/golang_test_01_image:heartbeat-bad" already present on machine
+  Normal   Created    3m32s                kubelet            Created container golang-test-01-heartbeat-pod
+  Normal   Started    3m32s                kubelet            Started container golang-test-01-heartbeat-pod
+  Warning  Unhealthy  5s (x21 over 3m25s)  kubelet            Readiness probe failed: HTTP probe failed with statuscode: 500
+```
+
+可以看到，除了759d7bd846-w7wrv因为存活指针一直陷入Running和CrashLoopBackOff状态，6b77bb788f-xsbtc因为就绪指针一直校验失败，所以一直处于READY 0/1状态。
+
+## 小插曲：在“就绪指针”所演示的场景下，如何回滚？
+
+可以看到，在“就绪指针”案例的最后，w7wrv处于RUNNING和CrashLoopBackOff死循环，xsbtc处于READY 0/1状态，讲真确实有点尴尬。那么，对于**就绪指针一直不可达导致的滚动更新失败**，有什么好回滚方案呢？其实在生产环境中，也就这么两种可能：
+
+1. w7wrv正常RUNNING，没有CrashLoopBackOff（仅假设，这里重点是就绪指针不可达）。xsbtc一直处于READY 0/1。
+2. w7wrv处于RUNNING和CrashLoopBackOff死循环。xsbtc一直处于READY 0/1。
+
+对于情况1还有退路，可以回滚到w7wrv，此时kubectl rollout history查看版本号，然后kubectl rollout --to-version回滚到情况1的版本号就好了。
+
+但是对于情况2，已经没有退路了，w7wrv本身就不正常。因此重点要放在xsbtc，让开发人员修复好Bug，保证就绪指针可以到达，重新打包成镜像（假设版本好为fix）、上传到镜像仓库。修改Deployment的配置文件，将镜像版本号改为fix，然后kubectl apply -f重新滚动更新即可。
 
 # 重新梳理一下Deployment的对外访问
 
