@@ -780,19 +780,104 @@ Events:
 
 但是对于情况2，已经没有退路了，w7wrv本身就不正常。因此重点要放在xsbtc，让开发人员修复好Bug，保证就绪指针可以到达，重新打包成镜像（假设版本好为fix）、上传到镜像仓库。修改Deployment的配置文件，将镜像版本号改为fix，然后kubectl apply -f重新滚动更新即可。
 
-# 重新梳理一下Deployment的对外访问
-
-## Service
-
-## NodePort
-
-## LoadBalancer
-
-## Ingress
-
 # K8S提供的配置中心：ConfigMap
 
+ConfigMap作为K8S提供的配置中心，可以管理多个Deployment、多个Pod的配置信息，这些配置信息可以赋值于 相关资源的yaml配置文件里，常用于注入Pod环境变量内。**值得注意的是，ConfigMap 在设计上不是用来保存大量数据的。在 ConfigMap 中保存的数据不可超过 1 MiB**。因此ConfigMap更适合保存轻量级配置，至于重量级配置可以考虑应用级别的配置中心，比如常用的Nacos、Apollo：
+
+编写一个简单的ConfigMap资源配置：
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: golang-test-01-configmap
+  namespace: golang-test-01
+data:
+  TEST_PARAM: this is test param
+```
+
+```bash
+root@kjg-PC:~/golang_test_01# kubectl apply -f golang-test-01-configmap.yaml 
+configmap/golang-test-01-configmap created
+root@kjg-PC:~/golang_test_01# kubectl get configmap -n golang-test-01
+NAME                       DATA   AGE
+golang-test-01-configmap   1      13s
+kube-root-ca.crt           1      6d8h
+```
+
+新建一个Golang Demo，内容是输出环境变量信息：
+
+```golang
+package main
+
+import (
+   "io"
+   "net/http"
+   "os"
+)
+
+func main() {
+   http.HandleFunc("/", Handler)
+   http.ListenAndServe(":10000", nil)
+}
+
+func Handler(rw http.ResponseWriter, request *http.Request) {
+   env := os.Getenv("TEST_PARAM")
+   io.WriteString(rw,env)
+}
+```
+
+打包成镜像：golang_test_01_config，上传到harbor，这里就不演示了，上面有过程。
+
+编写Deployment：
+
+```yaml
+kind: Deployment
+metadata:
+  name: golang-test-01-config
+  namespace: golang-test-01
+  labels:
+    app: golang-test-01-config
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: golang-test-01-config
+  template:
+    metadata:
+      labels:
+        app: golang-test-01-config
+    spec:
+      containers:
+      - name: golang-test-01-config
+        image: harbor.genn.com/golang_01/golang_test_01_config
+        ports:
+          - name: http
+            containerPort: 10000
+            protocol: TCP
+        env: 
+          - name: TEST_PARAM # 指定pod内的参数名
+            valueFrom: 
+              configMapKeyRef:
+                name: golang-test-01-configmap # 从名为golang-test-01-configmap的configmap获取
+                key: TEST_PARAM # 从configmap找到TEST_PARAM的值
+```
+
+启动golang-test-01-config，观察接口的环境变量值：
+
+```bash
+root@kjg-PC:~/golang_test_01# kubectl apply -f golang-test-01-deployment-config.yaml
+deployment.apps/golang-test-01-config created
+root@kjg-PC:~/golang_test_01# kubectl get pods -n golang-test-01 -owide
+NAME                                     READY   STATUS    RESTARTS   AGE   IP             NODE       NOMINATED NODE   READINESS GATES
+golang-test-01-config-849b44b7fd-5zcgl   1/1     Running   0          22s   172.31.3.226   ubuntu01   <none>           <none>
+root@kjg-PC:~/golang_test_01# curl http://172.31.3.226:10000
+this is test param
+```
+
 # K8S提供的密钥中心：Secret
+
+
 
 # K8S的部署管家：Helm
 
