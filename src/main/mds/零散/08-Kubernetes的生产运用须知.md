@@ -875,9 +875,289 @@ root@kjg-PC:~/golang_test_01# curl http://172.31.3.226:10000
 this is test param
 ```
 
-# K8S提供的密钥中心：Secret
-
-
-
 # K8S的部署管家：Helm
 
+## 为什么要Helm
+
+上面的例子都是使用 资源配置文件 + kubectl apply -f 的方式进行部署，如果换一个namespace，或者说换一个K8S集群，也要这样一个一个地kubectl apply -f吗？这未免有点**非自动化**。对于一整个项目来说，往往会有许多Deployment、Service、ConfigMap，我希望使用一个命令就能将这些资源安装完成，而执行这个命令的工具则是Helm。
+
+Helm的基本运行单位是Chart，可以理解为：将一个项目的Pod、Deployment、Service、ConfigMap等资源包装成1个Chart，再使用Helm将这个Chart安装到K8S集群中，从而实现一键部署。
+
+## 安装Helm
+
+```
+curl https://baltocdn.com/helm/signing.asc | gpg --dearmor | sudo tee /usr/share/keyrings/helm.gpg > /dev/null
+
+sudo apt-get install apt-transport-https --yes
+
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/helm.gpg] https://baltocdn.com/helm/stable/debian/ all main" | sudo tee /etc/apt/sources.list.d/helm-stable-debian.list
+
+sudo apt-get update
+
+sudo apt-get install helm
+```
+
+## 新建Chart
+
+新建一个名为chart01的chart：
+
+```bash
+root@kjg-PC:~# mkdir -p /root/charts && cd /root/charts
+root@kjg-PC:~/charts# helm create chart01 
+Creating chart01
+root@kjg-PC:~/charts# cd chart01/
+root@kjg-PC:~/charts/chart01# ll
+总用量 16
+drwxr-xr-x 2 root root 4096 4月  19 13:09 charts
+-rw-r--r-- 1 root root 1143 4月  19 13:09 Chart.yaml
+drwxr-xr-x 3 root root 4096 4月  19 13:09 templates
+-rw-r--r-- 1 root root 1874 4月  19 13:09 values.yaml
+```
+
+此时chart01的目录结构是这样的：
+
+```
+chart01/
+├── charts
+├── Chart.yaml
+├── templates
+│   ├── deployment.yaml
+│   ├── _helpers.tpl
+│   ├── hpa.yaml
+│   ├── ingress.yaml
+│   ├── NOTES.txt
+│   ├── serviceaccount.yaml
+│   ├── service.yaml
+│   └── tests
+│       └── test-connection.yaml
+└── values.yaml
+```
+
+通常会将新建Chart后默认的yaml文件清除，替换成要部署的资源，比如我将ConfigMap例子演示的资源替换过去：
+
+```bash
+root@kjg-PC:~/charts/chart01/templates# rm -r *
+root@kjg-PC:~/charts/chart01/templates# cp ../../../golang_test_01/golang-test-01-configmap.yaml  ../../../golang_test_01/golang-test-01-deployment-config.yaml .
+root@kjg-PC:~/charts/chart01/templates# tree ..
+..
+├── charts
+├── Chart.yaml
+├── templates
+│   ├── golang-test-01-configmap.yaml
+│   └── golang-test-01-deployment-config.yaml
+└── values.yaml
+
+2 directories, 4 files
+```
+
+## value.yaml
+
+可以理解为chart01里面的**K8S资源的配置中心**，将配置内容写在根目录的values.yaml文件内，Helm在安装chart01后，chart01内的资源会根据Go Template的方式从value.yaml动态获取值：
+
+```
+root@kjg-PC:~/charts/chart01/templates# cd ..
+root@kjg-PC:~/charts/chart01# vim values.yaml
+```
+
+```yaml
+TEST_PARAM: this is helm test param>>>
+NAMESPACE: golang-test-chart
+```
+
+很简单的一行配置，那么怎么使用它呢？用Go Template，我修改一下templates下的golang-test-01-configmap.yaml：
+
+```bash
+root@kjg-PC:~/charts/chart01# vim templates/golang-test-01-configmap.yaml
+```
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: golang-test-01-configmap
+  namespace: {{ .Values.NAMESPACE }}
+data:
+  TEST_PARAM: {{ .Values.TEST_PARAM }}append ConfigMap Value
+```
+
+其中`.Values.`代表使用根目录下的values.yaml文件，NAMESPACE代表使用文件内的NAMESPACE配置值，TEST_PARAM代表使用文件内的TEST_PARAM配置值，{{}}外的append ConfigMap Value会动态拼接到值里面。
+
+同样的，也改一下Deployment的namespace，使用values的配置值：
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: golang-test-01-config
+  namespace: {{ .Values.NAMESPACE }} # 使用Go Template方式填充
+  labels:
+    app: golang-test-01-config
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: golang-test-01-config
+  template:
+    metadata:
+      labels:
+        app: golang-test-01-config
+    spec:
+      containers:
+      - name: golang-test-01-config
+        image: harbor.genn.com/golang_01/golang_test_01_config
+        ports:
+          - name: http
+            containerPort: 10000
+            protocol: TCP
+        env:
+          - name: TEST_PARAM # 指定pod内的参数名
+            valueFrom:
+              configMapKeyRef:
+                name: golang-test-01-configmap # 从名为golang-test-01-configmap的configmap获取
+                key: TEST_PARAM # 从configmap找到TEST_PARAM的值
+```
+
+## 安装Chart01
+
+有了上面的准备，接下来创建命名空间 golang-test-chart：
+
+```bash
+root@kjg-PC:~/charts/chart01# kubectl create namespace golang-test-chart
+namespace/golang-test-chart created
+```
+
+稍微修改一下Chart.yaml，它是Chart的元文件，可以理解为启动入口，这里仅修改描述
+
+```yaml
+apiVersion: v2
+name: chart01
+description: A Helm chart demo for golang-test-chart
+type: application
+version: 0.1.0
+appVersion: "1.16.0"
+```
+
+在Chart01的根目录下，执行helm upgrade命令，安装Chart01：
+
+```bash
+root@kjg-PC:~/charts/chart01# helm upgrade --install chart01 --values values.yaml .
+Release "chart01" does not exist. Installing it now.
+NAME: chart01
+LAST DEPLOYED: Wed Apr 19 20:43:37 2023
+NAMESPACE: default
+STATUS: deployed
+REVISION: 1
+TEST SUITE: None
+root@kjg-PC:~/charts/chart01# kubectl get pods -n golang-test-chart -owide
+NAME                                     READY   STATUS    RESTARTS   AGE   IP             NODE       NOMINATED NODE   READINESS GATES
+golang-test-01-config-849b44b7fd-74sp5   1/1     Running   0          39s   172.31.3.227   ubuntu01   <none>           <none>
+root@kjg-PC:~/charts/chart01# kubectl get configmap -n golang-test-chart
+NAME                       DATA   AGE
+golang-test-01-configmap   1      47s
+kube-root-ca.crt           1      7m41s
+
+### curl测试一下
+root@kjg-PC:~/charts/chart01# curl http://172.31.3.227:10000
+this is helm test param>>>append ConfigMap Value
+```
+
+## 更新
+
+Chart01配置信息可以更新与回滚，以下更新TEST_PARAM的值：
+
+```yaml
+TEST_PARAM: this is helm test param version 2>>>
+```
+
+更新值到Chart01：
+
+```bash
+root@kjg-PC:~/charts/chart01# helm upgrade --install chart01 --values values.yaml .
+Release "chart01" has been upgraded. Happy Helming!
+NAME: chart01
+LAST DEPLOYED: Wed Apr 19 20:56:44 2023
+NAMESPACE: default
+STATUS: deployed
+REVISION: 2
+TEST SUITE: None
+root@kjg-PC:~/charts/chart01# kubectl get pods -n golang-test-chart -owide
+NAME                                     READY   STATUS    RESTARTS   AGE   IP             NODE       NOMINATED NODE   READINESS GATES
+golang-test-01-config-849b44b7fd-74sp5   1/1     Running   0          13m   172.31.3.227   ubuntu01   <none>           <none>
+root@kjg-PC:~/charts/chart01# curl http://172.31.3.227:10000
+this is helm test param>>>append ConfigMap Value
+```
+
+此时发现pod的值没有发生变化，有点奇怪，检查一下ConfigMap的值：
+
+```bash
+root@kjg-PC:~/charts/chart01# kubectl edit configmap golang-test-01-configmap -n golang-test-chart
+####以下是运行时的configmap值####
+apiVersion: v1
+items:
+- apiVersion: v1
+  data:
+    TEST_PARAM: this is helm test param version 2>>>append ConfigMap Value
+```
+
+起码ConfigMap是更新上了，为什么Pod还是没变？回看Deployment的内容，发现读取ConfigMap值的是环境变量，环境变量是在容器启动的时候注入的，启动之后 kubernetes 就不会再改变环境变量的值，为了验证改动，**我决定先将副本数设置为 0，然后再扩容，强制获取ConfigMap的最新值**：
+
+```bash
+root@kjg-PC:~/charts/chart01# helm upgrade --install chart01 --values values.yaml .
+Release "chart01" has been upgraded. Happy Helming!
+NAME: chart01
+LAST DEPLOYED: Wed Apr 19 21:09:48 2023
+NAMESPACE: default
+STATUS: deployed
+REVISION: 4
+TEST SUITE: None
+root@kjg-PC:~/charts/chart01# kubectl get pods -n golang-test-chart -owide
+NAME                                     READY   STATUS    RESTARTS   AGE   IP             NODE       NOMINATED NODE   READINESS GATES
+golang-test-01-config-849b44b7fd-4gr6q   1/1     Running   0          10s   172.31.3.229   ubuntu01   <none>           <none>
+root@kjg-PC:~/charts/chart01# curl http://172.31.3.229:10000
+this is helm test param version 2>>>append ConfigMap Value
+```
+
+## 回滚
+
+现在我想回到最初阶段：
+
+```bash
+root@kjg-PC:~/charts/chart01# helm ls
+NAME    NAMESPACE       REVISION        UPDATED                                 STATUS          CHART           APP VERSION
+chart01 default         4               2023-04-19 21:09:48.327346316 +0800 CST deployed        chart01-0.1.0   1.16.0
+```
+
+和kubectl的回滚一样，指定版本号回滚到最初状态：
+
+```bash
+root@kjg-PC:~/charts/chart01# helm rollback chart01 1
+Rollback was a success! Happy Helming!
+root@kjg-PC:~/charts/chart01# helm ls
+NAME    NAMESPACE       REVISION        UPDATED                                 STATUS          CHART           APP VERSION
+chart01 default         5               2023-04-19 21:22:54.303323911 +0800 CST deployed        chart01-0.1.0   1.16.0
+```
+
+值得注意的是，回滚后的REVISION不是1，而是追加1变成5，个人感觉有点反人类。因为环境变量不会热更新到Pod，因此查看ConfigMap的运行时配置：
+
+```yaml
+apiVersion: v1
+data:
+  TEST_PARAM: this is helm test param>>>append ConfigMap Value
+kind: ConfigMap
+```
+
+可以看到，回滚成功了。
+
+## Helm的值覆盖
+
+```bash
+root@kjg-PC:~/charts/chart01# helm upgrade --install chart01 -f values.yaml -f values-dev.yaml -n dev .
+```
+
+可以多次指定'--values -f'参数，最后（最右边）指定的文件优先级最高，这里最右边的是 `values-dev.yaml` 文件，所以 `values-dev.yaml` 文件中的值会覆盖 `values.yaml` 中相同的值，`-n dev` 表示在名字为 dev 的 namespace 中创建 k8s 资源。**越往右优先级越高**。
+
+```bash
+root@kjg-PC:~/charts/chart01# helm upgrade --install hello-helm -f values.yaml -f values-dev.yaml --set SET_VALUE="THIS VALUE WAS SETED IN TERMIAL" -n dev . 
+```
+
+除此之外，还可以使用 '--set-file' 设置独立的值，用这种方式在命令中设置 values 的值，可以随意修改相关配置，此方法在 CICD 中经常用到。
