@@ -245,3 +245,69 @@ kjg1@ubuntu02:~/jenkins_output$ tree .
 10 directories, 9 files
 ```
 
+更改启动脚本，从原本的
+
+1. 通过jar包判断pid是否存在，如果存在则kill。
+2. nohup java -jar。
+
+变成
+
+1. 判断jar包的container是否存在，如果存在则docker stop && docker rm。
+2. 判断jar包的镜像是否存在，如果存在则docker rmi。
+3. 打包镜像。
+4. 将镜像推到Harbor（这一步在`镜像部署`章节并非关键）。
+5. 启动容器。
+
+注意network用物理机的IP，同时加上Nacos的host映射，不然会启动失败：
+
+```shell
+#!/bin/bash
+IMAGE_NAME=harbor.genn.com/cloud_01/cloud-order
+containerId=`docker ps -a | grep "$IMAGE_NAME" | awk '{print $1}'`
+imageId=`docker images | grep "$IMAGE_NAME" | awk '{print $3}'`
+echo "containerId=$containerId,imageId=$imageId"
+
+docker stop $containerId
+docker rm $containerId
+docker rmi $imageId
+cp /home/kjg1/jenkins_output/Cloud_Order/target/*.jar /home/kjg1/jenkins_output/Cloud_Order/dockerfiles
+docker build -t $IMAGE_NAME /home/kjg1/jenkins_output/Cloud_Order/dockerfiles
+docker run -d --network=host -p 8001:8001 -e "ORDER_META=this is order meta" --add-host=kjg-pc:192.168.120.161 $IMAGE_NAME --name=test-order-env
+docker push $IMAGE_NAME
+```
+
+```shell
+#!/bin/bash
+IMAGE_NAME=harbor.genn.com/cloud_01/cloud-stock
+containerId=`docker ps -a | grep "$IMAGE_NAME" | awk '{print $1}'`
+imageId=`docker images | grep "$IMAGE_NAME" | awk '{print $3}'`
+echo "containerId=$containerId,imageId=$imageId"
+
+docker stop $containerId
+docker rm $containerId
+docker rmi $imageId
+cp /home/kjg1/jenkins_output/Cloud_Stock/target/*.jar /home/kjg1/jenkins_output/Cloud_Stock/dockerfiles
+docker build -t $IMAGE_NAME /home/kjg1/jenkins_output/Cloud_Stock/dockerfiles
+docker run -d --network=host -p 9001:9001 -e "STOCK_META=10086" --add-host=kjg-pc:192.168.120.161 $IMAGE_NAME --name=test-stock-env
+docker push $IMAGE_NAME
+```
+
+Ubuntu02一开始没有镜像、也没有容器，部署成功后，发现正常运行：
+
+```bash
+kjg1@ubuntu02:~/jenkins_output/Cloud_Order/sh$ docker images | grep cloud-
+kjg1@ubuntu02:~/jenkins_output/Cloud_Order/sh$ docker ps -a | grep cloud-
+kjg1@ubuntu02:~/jenkins_output/Cloud_Order/sh$ docker images | grep cloud-
+harbor.genn.com/cloud_01/cloud-stock                                        latest    860f73c37ad1   52 seconds ago   679MB
+harbor.genn.com/cloud_01/cloud-order                                        latest    dc2346fb73b4   56 seconds ago   679MB
+kjg1@ubuntu02:~/jenkins_output/Cloud_Order/sh$ docker ps -a | grep cloud-
+52816744ce18   harbor.genn.com/cloud_01/cloud-stock                "java -jar '-Dfile-e…"   54 seconds ago   Up 53 seconds                       vigilant_edison
+f974e77d31fd   harbor.genn.com/cloud_01/cloud-order                "java -jar '-Dfile-e…"   58 seconds ago   Up 57 seconds                       relaxed_northcutt
+kjg1@ubuntu02:~/jenkins_output/Cloud_Order/sh$ curl http://localhost:8001/order/order/env
+this is order meta
+kjg1@ubuntu02:~/jenkins_output/Cloud_Order/sh$ curl http://localhost:9001/stock/stock/env
+10086
+kjg1@ubuntu02:~/jenkins_output/Cloud_Order/sh$ curl http://localhost:8001/order/order/preOrder/1
+{"metaId":"this is order meta","orderId":1,"stock":10086}
+```
+
