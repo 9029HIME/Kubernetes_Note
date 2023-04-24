@@ -311,3 +311,209 @@ kjg1@ubuntu02:~/jenkins_output/Cloud_Order/sh$ curl http://localhost:8001/order/
 {"metaId":"this is order meta","orderId":1,"stock":10086}
 ```
 
+## pipeline+镜像部署
+
+### pipeline模板
+
+一般情况下不会使用上面“构建一个maven项目”的方式配置Jenkins项目，而是使用灵活性更高的pipeline方式。从名称以及Jenkins的部署流程来看，pipeline是一种更原生的部署方式，可以提供更灵活的部署操作。
+
+新建一个pipeline项目：
+
+![14](07-结合Jenkins使用K8S完成自动化部署.assets/14.png)
+
+在配置的最下面，编写pipeline脚本：
+
+![15](07-结合Jenkins使用K8S完成自动化部署.assets/15.png)
+
+这么看来，pipeline部署的大部分工作，在于pipeline(grovvy)脚本的编写。那么pipeline脚本该如何写呢？以下写一个demo，并解释它的结构含义：
+
+```groovy
+pipeline {
+    agent any
+    
+    environment {
+        a = 'b'
+    }
+    
+    stages {
+        stage('GitHub拉取代码') {
+            steps{
+                echo 'GitHub拉取代码成功'
+            }
+        }
+        stage('Maven构建代码') {
+            steps{
+                echo 'Maven构建代码成功'
+            }
+        }
+        stage('打包镜像') {
+            steps{
+                echo '打包镜像成功'
+            }
+        }
+        stage('镜像上传至Harbor') {
+            steps{
+                echo '镜像上传至Harbor成功'
+            }
+        }
+        stage('Ubuntu02拉取镜像并部署') {
+            steps{
+                echo 'Ubuntu02拉取镜像并部署成功'
+            }
+        }
+    }
+}
+```
+
+1. agent any：Jenkins集群中的任意一个节点都能执行这条流水线。
+2. enviroment：Jenkins构建过程中的环境变量，以key='value'的方式命名，通过$key的方式引用。
+3. stages：包含多个stage，一个stage代表一次行为，比如拉取代码是一个stage，构建代码是一个stage，打包镜像是一个stage。
+4. steps：一个stage里面的具体操作，多个step用回车行划分。
+5. jenkins自带step脚本生成器，将操作配置好，可以生成可用的step脚本，将step脚本放在steps{}内即可，多条step脚本用回车行划分。
+6. step脚本可以通过$的方式读取jenkins的构建参数、enviroment参数。
+
+上面的pipeline脚本只是打印步骤，没有执行真实操作，值得注意的是：上面的`镜像部署`章节是Jenkins将构建好的jar包、脚本传到Ubuntu02，在Ubuntu02完成镜像打包、容器启动、上传Harbor的操作。**而这里的pipeline脚本是Jenkins将构建好的jar包在本地打包镜像、上传到Harbor，再通知Ubuntu02从Harbor拉取镜像、启动容器**。
+
+好了，接下来保存，Build一下K8S_SpringCloud_Demo_Pipeline：
+
+![16](07-结合Jenkins使用K8S完成自动化部署.assets/16.png)
+
+Jenkins会根据pipeline的stage划分不同步骤，每个步骤各自的日志（Logs），因为只是样例，这里的日志（Logs）是echo的内容，不存在有价值的日志，接下来按顺序，逐个步骤完善pipeline的内容。
+
+### 步骤1：拉取代码
+
+Jenkins提供了pipeline生成器，在流水线下面的“流水线语法”里，选择checkout操作，配置好仓库信息，就能一键生成pipeline脚本：
+
+![17](07-结合Jenkins使用K8S完成自动化部署.assets/17.png)
+
+将pipeline脚本复制到对应的steps里，得到：
+
+```
+pipeline {
+    agent any
+    
+    environment {
+        a = 'b'
+    }
+    
+    stages {
+        stage('GitHub拉取代码') {
+            steps{
+            	checkout([$class: 'GitSCM', branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[credentialsId: '18fcfa81-dfd3-407f-8729-4db78285f4d5', url: 'https://github.com/9029HIME/jenkins_k8s_demo_project.git']]])
+                echo 'GitHub拉取代码成功'
+            }
+        }
+        stage('Maven构建代码') {
+            steps{
+                echo 'Maven构建代码成功'
+            }
+        }
+        stage('打包镜像') {
+            steps{
+                echo '打包镜像成功'
+            }
+        }
+        stage('镜像上传至Harbor') {
+            steps{
+                echo '镜像上传至Harbor成功'
+            }
+        }
+        stage('Ubuntu02拉取镜像并部署') {
+            steps{
+                echo 'Ubuntu02拉取镜像并部署成功'
+            }
+        }
+    }
+}
+```
+
+保存、Build，可以发现：
+
+![18](07-结合Jenkins使用K8S完成自动化部署.assets/18.png)
+
+```bash
+root@kjg-PC:/usr/local/jenkins/workspace/K8S_SpringCloud_Demo_Pipeline# ll
+总用量 16
+drwxr-sr-x 5 root staff 4096 4月  24 22:39 Cloud_Order
+drwxr-sr-x 5 root staff 4096 4月  24 22:39 Cloud_Stock
+-rw-r--r-- 1 root staff 1961 4月  24 22:39 pom.xml
+drwxr-sr-x 3 root staff 4096 4月  24 22:39 Stock_Feign
+```
+
+### 步骤2：Maven构建代码
+
+在步骤1拉取代码成功后，需要通过Maven手动打包代码，同样的，也是基于pipeline的生成器，这里使用原生shell script的方式：
+
+![19](07-结合Jenkins使用K8S完成自动化部署.assets/19.png)
+
+此时Jenkins会基于项目目录进行操作（即workspace/K8S_SpringCloud_Demo_Pipeline），所以直接执行mvn命令即可，不需要指定root pom的路径。将pipeline脚本复制到对应的step里，得到：
+
+```groovy
+pipeline {
+    agent any
+    
+    environment {
+        a = 'b'
+    }
+    
+    stages {
+        stage('GitHub拉取代码') {
+            steps{
+            	checkout([$class: 'GitSCM', branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[credentialsId: '18fcfa81-dfd3-407f-8729-4db78285f4d5', url: 'https://github.com/9029HIME/jenkins_k8s_demo_project.git']]])
+                echo 'GitHub拉取代码成功'
+            }
+        }
+        stage('Maven构建代码') {
+            steps{
+                sh '/usr/local/maven/bin/mvn clean package -DskipTests'
+                echo 'Maven构建代码成功'
+            }
+        }
+        stage('打包镜像') {
+            steps{
+                echo '打包镜像成功'
+            }
+        }
+        stage('镜像上传至Harbor') {
+            steps{
+                echo '镜像上传至Harbor成功'
+            }
+        }
+        stage('Ubuntu02拉取镜像并部署') {
+            steps{
+                echo 'Ubuntu02拉取镜像并部署成功'
+            }
+        }
+    }
+}
+```
+
+在此之前，检查一遍workspace/K8S_SpringCloud_Demo_Pipeline下没有jar包：
+
+```bash
+root@kjg-PC:/usr/local/jenkins/workspace/K8S_SpringCloud_Demo_Pipeline# ll
+总用量 16
+drwxr-sr-x 5 root staff 4096 4月  24 22:39 Cloud_Order
+drwxr-sr-x 5 root staff 4096 4月  24 22:39 Cloud_Stock
+-rw-r--r-- 1 root staff 1961 4月  24 22:39 pom.xml
+drwxr-sr-x 3 root staff 4096 4月  24 22:39 Stock_Feign
+root@kjg-PC:/usr/local/jenkins/workspace/K8S_SpringCloud_Demo_Pipeline# find .  -name *.jar 
+root@kjg-PC:/usr/local/jenkins/workspace/K8S_SpringCloud_Demo_Pipeline# 
+```
+
+保存、Build，可以发现：
+
+![20](07-结合Jenkins使用K8S完成自动化部署.assets/20.png)
+
+再检查一下jar包：
+
+```bash
+root@kjg-PC:/usr/local/jenkins/workspace/K8S_SpringCloud_Demo_Pipeline# find .  -name *.jar 
+./Stock_Feign/target/Stock_Feign-1.0-SNAPSHOT.jar
+./Cloud_Order/target/Cloud_Order-1.0-SNAPSHOT.jar
+./Cloud_Stock/target/Cloud_Stock-1.0-SNAPSHOT.jar
+```
+
+打包成功。
+
+### 步骤3：打包镜像
