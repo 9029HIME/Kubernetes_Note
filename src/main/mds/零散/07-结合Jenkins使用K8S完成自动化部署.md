@@ -517,3 +517,260 @@ root@kjg-PC:/usr/local/jenkins/workspace/K8S_SpringCloud_Demo_Pipeline# find .  
 打包成功。
 
 ### 步骤3：打包镜像
+
+同样地以Shell脚本的方式执行，要注意默认工作路径是workspace/K8S_SpringCloud_Demo_Pipeline：
+
+![21](07-结合Jenkins使用K8S完成自动化部署.assets/21.png)
+
+得到：
+
+```groovy
+pipeline {
+    agent any
+    
+    environment {
+        a = 'b'
+    }
+    
+    stages {
+        stage('GitHub拉取代码') {
+            steps{
+            	checkout([$class: 'GitSCM', branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[credentialsId: '18fcfa81-dfd3-407f-8729-4db78285f4d5', url: 'https://github.com/9029HIME/jenkins_k8s_demo_project.git']]])
+                echo 'GitHub拉取代码成功'
+            }
+        }
+        stage('Maven构建代码') {
+            steps{
+                sh '/usr/local/maven/bin/mvn clean package -DskipTests'
+                echo 'Maven构建代码成功'
+            }
+        }
+        stage('打包镜像') {
+            steps{
+                sh '''mv ./Cloud_Order/target/Cloud_Order-1.0-SNAPSHOT.jar  ./Cloud_Order/dockerfiles/
+docker build -t harbor.genn.com/cloud_01/cloud-order ./Cloud_Order/dockerfiles/
+
+mv ./Cloud_Stock/target/Cloud_Stock-1.0-SNAPSHOT.jar  ./Cloud_Stock/dockerfiles/
+docker build -t harbor.genn.com/cloud_01/cloud-stock ./Cloud_Stock/dockerfiles/'''
+                echo '打包镜像成功'
+            }
+        }
+        stage('镜像上传至Harbor') {
+            steps{
+                echo '镜像上传至Harbor成功'
+            }
+        }
+        stage('Ubuntu02拉取镜像并部署') {
+            steps{
+                echo 'Ubuntu02拉取镜像并部署成功'
+            }
+        }
+    }
+}
+```
+
+执行之前，检查Master机不存在相关镜像：
+
+```bash
+root@kjg-PC:/usr/local/jenkins/workspace/K8S_SpringCloud_Demo_Pipeline# docker images | grep cloud-
+root@kjg-PC:/usr/local/jenkins/workspace/K8S_SpringCloud_Demo_Pipeline# 
+```
+
+保存、Build，可以发现：
+
+![22](07-结合Jenkins使用K8S完成自动化部署.assets/22.png)
+
+并且镜像也成功生成：
+
+```bash
+root@kjg-PC:/usr/local/jenkins/workspace/K8S_SpringCloud_Demo_Pipeline# docker images | grep cloud-
+harbor.genn.com/cloud_01/cloud-stock                                       latest              deb25b47d37d        About a minute ago   679MB
+harbor.genn.com/cloud_01/cloud-order                                       latest              8bf7e8e44d48        About a minute ago   679MB
+```
+
+### 步骤4：推送镜像到Harbor
+
+在推送镜像指向，将Harbor的地址、用户名、密码配置到全局变量里：
+
+```groovy
+environment {
+        harborHost = 'harbor.genn.com'
+    	harborUser = 'admin'
+    	harborPwd = 'harbor'
+}
+```
+
+通过shell脚本生成groovy脚本，用$使用上面定义好的变量：
+
+![23](07-结合Jenkins使用K8S完成自动化部署.assets/23.png)
+
+最终得到脚本：
+
+```groovy
+pipeline {
+    agent any
+    
+    environment {
+        harborHost = 'harbor.genn.com'
+    	harborUser = 'admin'
+    	harborPwd = 'harbor'
+    }
+    
+    stages {
+        stage('GitHub拉取代码') {
+            steps{
+            	checkout([$class: 'GitSCM', branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[credentialsId: '18fcfa81-dfd3-407f-8729-4db78285f4d5', url: 'https://github.com/9029HIME/jenkins_k8s_demo_project.git']]])
+                echo 'GitHub拉取代码成功'
+            }
+        }
+        stage('Maven构建代码') {
+            steps{
+                sh '/usr/local/maven/bin/mvn clean package -DskipTests'
+                echo 'Maven构建代码成功'
+            }
+        }
+        stage('打包镜像') {
+            steps{
+                sh '''mv ./Cloud_Order/target/Cloud_Order-1.0-SNAPSHOT.jar  ./Cloud_Order/dockerfiles/
+docker build -t harbor.genn.com/cloud_01/cloud-order ./Cloud_Order/dockerfiles/
+
+mv ./Cloud_Stock/target/Cloud_Stock-1.0-SNAPSHOT.jar  ./Cloud_Stock/dockerfiles/
+docker build -t harbor.genn.com/cloud_01/cloud-stock ./Cloud_Stock/dockerfiles/'''
+                echo '打包镜像成功'
+            }
+        }
+        stage('镜像上传至Harbor') {
+            steps{
+                sh '''docker login -u $harborUser -p $harborPwd $harborHost
+docker push harbor.genn.com/cloud_01/cloud-order
+docker push harbor.genn.com/cloud_01/cloud-stock'''
+                echo '镜像上传至Harbor成功'
+            }
+        }
+        stage('Ubuntu02拉取镜像并部署') {
+            steps{
+                echo 'Ubuntu02拉取镜像并部署成功'
+            }
+        }
+    }
+}
+```
+
+保存、Build，可以发现：
+
+![24](07-结合Jenkins使用K8S完成自动化部署.assets/24.png)
+
+同时在harbor也能看到最新版本的镜像：
+
+![25](07-结合Jenkins使用K8S完成自动化部署.assets/25.png)
+
+![26](07-结合Jenkins使用K8S完成自动化部署.assets/26.png)
+
+### 步骤5：Ubuntu02拉取镜像、部署容器
+
+在这一步可以通过Master通过ssh的方式连接Ubuntu02完成。将之前的脚本精简一下，去掉打包镜像、上传镜像的步骤，同时新增拉取镜像的操作：
+
+```shell
+#!/bin/bash
+IMAGE_NAME=harbor.genn.com/cloud_01/cloud-order
+containerId=`docker ps -a | grep "$IMAGE_NAME" | awk '{print $1}'`
+imageId=`docker images | grep "$IMAGE_NAME" | awk '{print $3}'`
+echo "containerId=$containerId,imageId=$imageId"
+docker stop $containerId
+docker rm $containerId
+docker rmi $imageId
+docker pull $IMAGE_NAME
+docker run -d --network=host -p 8001:8001 -e "ORDER_META=this is order meta" --add-host=kjg-pc:192.168.120.161 $IMAGE_NAME --name=test-order-env
+```
+
+```shell
+#!/bin/bash
+IMAGE_NAME=harbor.genn.com/cloud_01/cloud-stock
+containerId=`docker ps -a | grep "$IMAGE_NAME" | awk '{print $1}'`
+imageId=`docker images | grep "$IMAGE_NAME" | awk '{print $3}'`
+echo "containerId=$containerId,imageId=$imageId"
+docker stop $containerId
+docker rm $containerId
+docker rmi $imageId
+docker pull $IMAGE_NAME
+docker run -d --network=host -p 9001:9001 -e "STOCK_META=10086" --add-host=kjg-pc:192.168.120.161 $IMAGE_NAME --name=test-stock-env
+```
+
+通过sshPublisher步骤生成groovy脚本，可以复用之前配置好的Ubuntu02：
+
+![27](07-结合Jenkins使用K8S完成自动化部署.assets/27.png)
+
+最终得到脚本：
+
+```groovy
+pipeline {
+    agent any
+    
+    environment {
+        harborHost = 'harbor.genn.com'
+    	harborUser = 'admin'
+    	harborPwd = 'harbor'
+    }
+    
+    stages {
+        stage('GitHub拉取代码') {
+            steps{
+            	checkout([$class: 'GitSCM', branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[credentialsId: '18fcfa81-dfd3-407f-8729-4db78285f4d5', url: 'https://github.com/9029HIME/jenkins_k8s_demo_project.git']]])
+                echo 'GitHub拉取代码成功'
+            }
+        }
+        stage('Maven构建代码') {
+            steps{
+                sh '/usr/local/maven/bin/mvn clean package -DskipTests'
+                echo 'Maven构建代码成功'
+            }
+        }
+        stage('打包镜像') {
+            steps{
+                sh '''mv ./Cloud_Order/target/Cloud_Order-1.0-SNAPSHOT.jar  ./Cloud_Order/dockerfiles/
+docker build -t harbor.genn.com/cloud_01/cloud-order ./Cloud_Order/dockerfiles/
+
+mv ./Cloud_Stock/target/Cloud_Stock-1.0-SNAPSHOT.jar  ./Cloud_Stock/dockerfiles/
+docker build -t harbor.genn.com/cloud_01/cloud-stock ./Cloud_Stock/dockerfiles/'''
+                echo '打包镜像成功'
+            }
+        }
+        stage('镜像上传至Harbor') {
+            steps{
+                sh '''docker login -u $harborUser -p $harborPwd $harborHost
+docker push harbor.genn.com/cloud_01/cloud-order
+docker push harbor.genn.com/cloud_01/cloud-stock'''
+                echo '镜像上传至Harbor成功'
+            }
+        }
+        stage('Ubuntu02拉取镜像并部署') {
+            steps{
+            	sshPublisher(publishers: [sshPublisherDesc(configName: 'ubuntu02', transfers: [sshTransfer(cleanRemote: false, excludes: '', execCommand: '''/usr/bin/sh /home/kjg1/scripts/start-order.sh
+/usr/bin/sh /home/kjg1/scripts/start-stock.sh''', execTimeout: 120000, flatten: false, makeEmptyDirs: false, noDefaultExcludes: false, patternSeparator: '[, ]+', remoteDirectory: '/home/kjg1/scripts/', remoteDirectorySDF: false, removePrefix: '', sourceFiles: 'Cloud_Order/sh/start-order.sh,Cloud_Stock/sh/start-stock.sh')], usePromotionTimestamp: false, useWorkspaceInPromotion: false, verbose: false)])
+                echo 'Ubuntu02拉取镜像并部署成功'
+            }
+        }
+    }
+}
+```
+
+保存、Build，可以发现：
+
+![28](07-结合Jenkins使用K8S完成自动化部署.assets/28.png)
+
+同时Ubuntu02的镜像、容器状态正常，curl测试也和之前的一样：
+
+```bash
+kjg1@ubuntu02:~$ docker images | grep cloud-
+harbor.genn.com/cloud_01/cloud-stock                                        latest    49354ece431e   33 seconds ago   679MB
+harbor.genn.com/cloud_01/cloud-order                                        latest    16d41465e25e   35 seconds ago   679MB
+kjg1@ubuntu02:~$ docker ps -a | grep cloud-
+75ee62722b9b   harbor.genn.com/cloud_01/cloud-stock                "java -jar '-Dfile-e…"   29 seconds ago   Up 28 seconds                           mystifying_zhukovsky
+5d53a021ab9d   harbor.genn.com/cloud_01/cloud-order                "java -jar '-Dfile-e…"   31 seconds ago   Up 30 seconds                           compassionate_perlman
+kjg1@ubuntu02:~$ curl http://localhost:8001/order/order/env
+this is order meta
+kjg1@ubuntu02:~$ curl http://localhost:9001/stock/stock/env
+10086
+kjg1@ubuntu02:~$ curl http://localhost:8001/order/order/preOrder/1
+{"metaId":"this is order meta","orderId":1,"stock":10086}
+```
