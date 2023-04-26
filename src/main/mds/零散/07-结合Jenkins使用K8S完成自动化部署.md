@@ -774,3 +774,192 @@ kjg1@ubuntu02:~$ curl http://localhost:9001/stock/stock/env
 kjg1@ubuntu02:~$ curl http://localhost:8001/order/order/preOrder/1
 {"metaId":"this is order meta","orderId":1,"stock":10086}
 ```
+
+# Jenkins+K8S部署
+
+有了前面的基础，接下来结合K8S完成部署，大致流程是：
+
+1. Jenkins机（Master机）拉取代码。
+2. Jenkins机构建代码。
+3. Jenkins机打包镜像。
+4. Jenkins机上传镜像到Harbor。
+5. Jenkins机执行kubectl，部署编写好的Deployment。
+6. Jenkins机将容器编排到Ubuntu02和Ubuntu01。
+
+1-4步之前已经做好了，现在重点是第5步，编写好Deploy的Yaml，并且通过pipeline控制K8S部署它。在这里修改一下[之前的Yaml](https://github.com/9029HIME/Kubernetes_Note/blob/master/src/main/mds/%E9%9B%B6%E6%95%A3/06-Kubernetes%E6%90%AD%E5%BB%BASpringCloud%E6%9C%8D%E5%8A%A1.md)，得到以下结果：
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: 
+  namespace: cloud
+  name: cloud-order-deployment
+spec:
+  replicas: 2
+  selector: 
+    matchLabels:  
+      app: cloud-order-deployment
+      ctlr: balance
+  template:
+    metadata:
+      labels:
+        app: cloud-order-deployment
+        ctlr: balance 
+    spec: 
+      hostAliases:
+      - ip: "192.168.120.161"
+        hostnames:
+          - "kjg-pc"
+      containers: 
+        - name: cloud-order-deployment-pod
+          image: harbor.genn.com/cloud_01/cloud-order
+          imagePullPolicy: Always # 让每次部署都重新从Harbor拉取镜像
+          env: 
+            - name: ORDER_META
+              value: "this is k8s order(balance)"
+      affinity:
+        podAntiAffinity:                  
+          requiredDuringSchedulingIgnoredDuringExecution: 
+          - labelSelector:                       、
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - cloud-order-deployment
+              - key: ctlr
+                operator: In
+                values: 
+                - balance
+            namespaces:
+              - cloud
+            topologyKey: kubernetes.io/hostname
+```
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata: 
+  namespace: cloud
+  name: cloud-stock-deployment
+spec:
+  replicas: 2 
+  selector: 
+    matchLabels:  
+      app: cloud-stock-deployment
+      ctlr: balance 
+  template:
+    metadata:
+      labels:
+        app: cloud-stock-deployment
+        ctlr: balance
+    spec: 
+      hostAliases:
+      - ip: "192.168.120.161"
+        hostnames:
+          - "kjg-pc"
+      containers: 
+        - name: cloud-stock-deployment-pod
+          image: harbor.genn.com/cloud_01/cloud-stock
+          imagePullPolicy: Always # 让每次部署都重新从Harbor拉取镜像
+          env: 
+            - name: STOCK_META
+              value: "1011"
+      affinity:
+        podAntiAffinity:                   
+          requiredDuringSchedulingIgnoredDuringExecution:    
+          - labelSelector:                      
+              matchExpressions:
+              - key: app
+                operator: In
+                values:
+                - cloud-stock-deployment
+              - key: ctlr
+                operator: In
+                values: 
+                - balance
+            namespaces:
+              - cloud
+            topologyKey: kubernetes.io/hostname 
+```
+
+我将两个yaml文件放在/script目录下，让Pipeline去执行，得到最终脚本：
+
+```groovy
+pipeline {
+    agent any
+    
+    environment {
+        harborHost = 'harbor.genn.com'
+    	harborUser = 'admin'
+    	harborPwd = 'harbor'
+    }
+    
+    stages {
+        stage('GitHub拉取代码') {
+            steps{
+            	checkout([$class: 'GitSCM', branches: [[name: '*/master']], extensions: [], userRemoteConfigs: [[credentialsId: '18fcfa81-dfd3-407f-8729-4db78285f4d5', url: 'https://github.com/9029HIME/jenkins_k8s_demo_project.git']]])
+                echo 'GitHub拉取代码成功'
+            }
+        }
+        stage('Maven构建代码') {
+            steps{
+                sh '/usr/local/maven/bin/mvn clean package -DskipTests'
+                echo 'Maven构建代码成功'
+            }
+        }
+        stage('打包镜像') {
+            steps{
+                sh '''mv ./Cloud_Order/target/Cloud_Order-1.0-SNAPSHOT.jar  ./Cloud_Order/dockerfiles/
+docker build -t harbor.genn.com/cloud_01/cloud-order ./Cloud_Order/dockerfiles/
+
+mv ./Cloud_Stock/target/Cloud_Stock-1.0-SNAPSHOT.jar  ./Cloud_Stock/dockerfiles/
+docker build -t harbor.genn.com/cloud_01/cloud-stock ./Cloud_Stock/dockerfiles/'''
+                echo '打包镜像成功'
+            }
+        }
+        stage('镜像上传至Harbor') {
+            steps{
+                sh '''docker login -u $harborUser -p $harborPwd $harborHost
+docker push harbor.genn.com/cloud_01/cloud-order
+docker push harbor.genn.com/cloud_01/cloud-stock'''
+                echo '镜像上传至Harbor成功'
+            }
+        }
+        stage('K8S部署容器') {
+            steps{
+                sh 'kubectl apply -f /scripts/'
+            }
+        }
+//         stage('Ubuntu02拉取镜像并部署') {
+//             steps{
+//             	sshPublisher(publishers: [sshPublisherDesc(configName: 'ubuntu02', transfers: [sshTransfer(cleanRemote: false, excludes: '', execCommand: '''/usr/bin/sh /home/kjg1/scripts/start-order.sh
+// /usr/bin/sh /home/kjg1/scripts/start-stock.sh''', execTimeout: 120000, flatten: false, makeEmptyDirs: false, noDefaultExcludes: false, patternSeparator: '[, ]+', remoteDirectory: '/home/kjg1/scripts/', remoteDirectorySDF: false, removePrefix: '', sourceFiles: 'Cloud_Order/sh/start-order.sh,Cloud_Stock/sh/start-stock.sh')], usePromotionTimestamp: false, useWorkspaceInPromotion: false, verbose: false)])
+//                 echo 'Ubuntu02拉取镜像并部署成功'
+//             }
+//         }
+    }
+}
+```
+
+保存、Build，可以看到：
+
+![29](07-结合Jenkins使用K8S完成自动化部署.assets/29.png)
+
+同时项目也成功部署到Ubuntu01和Ubuntu02：
+
+```bash
+root@kjg-PC:~# kubectl get pods -n cloud -owide
+NAME                                      READY   STATUS    RESTARTS   AGE     IP             NODE       NOMINATED NODE   READINESS GATES
+cloud-order-deployment-5cfff576db-qlskz   1/1     Running   0          2m44s   172.31.3.235   ubuntu01   <none>           <none>
+cloud-order-deployment-5cfff576db-vxhlr   1/1     Running   1          2m44s   172.31.79.25   ubuntu02   <none>           <none>
+cloud-stock-deployment-58896c9db8-dvrj9   1/1     Running   0          2m44s   172.31.3.234   ubuntu01   <none>           <none>
+cloud-stock-deployment-58896c9db8-h9gmz   1/1     Running   0          2m44s   172.31.79.24   ubuntu02   <none>           <none>
+```
+
+# Jenkins+K8S部署-优化
+
+上面的部署其实是不完美的，我希望对它做一些优化：
+
+1. 可以指定分支进行Build。
+1. K8S部署的时候，可以采用滚动更新的方式。
+1. 使用Helm部署（结合08-Kubernetes的生产运用须知.md）。
